@@ -403,7 +403,7 @@ pub const cyber_gear_read_write_parameter_index_t_PARAMETER_IQ_REF:
 pub const cyber_gear_read_write_parameter_index_t_PARAMETER_SPD_REF:
     cyber_gear_read_write_parameter_index_t = 28682;
 #[doc = " 转矩限制\n 参数类型 float\n 参数字节数 4\n 参数说明 0~12Nm"]
-pub const cyber_gear_read_write_parameter_index_t_PARAMETER_IMIT_TORQUE:
+pub const cyber_gear_read_write_parameter_index_t_PARAMETER_LIMIT_TORQUE:
     cyber_gear_read_write_parameter_index_t = 28683;
 #[doc = " 电流的 Kp\n 参数类型 float\n 参数字节数 4\n 参数说明 默认值 0.125"]
 pub const cyber_gear_read_write_parameter_index_t_PARAMETER_CUR_KP:

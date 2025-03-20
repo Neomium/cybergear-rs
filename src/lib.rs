@@ -1,5 +1,10 @@
-pub mod bindings;
+#![cfg_attr(not(test), no_std)]
+extern crate alloc;
 
-mod cybergear;
+mod bindings;
+
+pub mod cybergear;
+
+pub mod frame;
 #[cfg(test)]
 mod tests;

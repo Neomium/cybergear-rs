@@ -1,11 +1,12 @@
+use crate::frame::CyberGearFrame;
 use embedded_can::nb::Can;
 use embedded_can::{ErrorKind, ExtendedId, Frame, Id};
 use mockall::mock;
 
 #[derive(Debug, Default)]
 pub struct MockFrame {
-    id: u32,
-    data: [u8; 8],
+    pub(crate) id: u32,
+    pub(crate) data: [u8; 8],
 }
 
 impl Frame for MockFrame {
@@ -36,16 +37,8 @@ impl Frame for MockFrame {
         true
     }
 
-    fn is_standard(&self) -> bool {
-        false
-    }
-
     fn is_remote_frame(&self) -> bool {
         false
-    }
-
-    fn is_data_frame(&self) -> bool {
-        true
     }
 
     fn id(&self) -> Id {
@@ -58,6 +51,24 @@ impl Frame for MockFrame {
 
     fn data(&self) -> &[u8] {
         &self.data
+    }
+}
+
+impl From<CyberGearFrame> for MockFrame {
+    fn from(value: CyberGearFrame) -> Self {
+        Self {
+            id: value.id,
+            data: value.data,
+        }
+    }
+}
+
+impl From<MockFrame> for CyberGearFrame {
+    fn from(value: MockFrame) -> Self {
+        Self {
+            id: value.id,
+            data: value.data,
+        }
     }
 }
 
