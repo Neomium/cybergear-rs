@@ -1,4 +1,4 @@
-use crate::frame::CyberGearFrame;
+use crate::frame::{CanFrameAdapter, CyberGearFrame};
 use embedded_can::nb::Can;
 use embedded_can::{ErrorKind, ExtendedId, Frame, Id};
 use mockall::mock;
@@ -54,20 +54,21 @@ impl Frame for MockFrame {
     }
 }
 
-impl From<CyberGearFrame> for MockFrame {
-    fn from(value: CyberGearFrame) -> Self {
-        Self {
-            id: value.id,
-            data: value.data,
+#[derive(Default)]
+pub(crate) struct MockAdapter;
+
+impl CanFrameAdapter<MockFrame> for MockAdapter {
+    fn from_frame(&self, frame: MockFrame) -> CyberGearFrame {
+        CyberGearFrame {
+            id: frame.id,
+            data: frame.data,
         }
     }
-}
 
-impl From<MockFrame> for CyberGearFrame {
-    fn from(value: MockFrame) -> Self {
-        Self {
-            id: value.id,
-            data: value.data,
+    fn to_frame(&self, frame: &CyberGearFrame) -> MockFrame {
+        MockFrame {
+            id: frame.id,
+            data: frame.data,
         }
     }
 }
@@ -82,9 +83,9 @@ impl embedded_can::Error for MockCanError {
 }
 
 mock! {
-    pub Dev {}
+    pub Can {}
 
-    impl Can for Dev {
+    impl Can for Can {
         type Frame = MockFrame;
         type Error = MockCanError;
 

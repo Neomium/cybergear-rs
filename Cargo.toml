@@ -14,3 +14,5 @@ nb = "1.1.0"
 
 [dev-dependencies]
 mockall = "0.13.1"
+tokio = { version = "1", features = ["macros", "rt", "test-util"] }
+critical-section = { version = "1.2.0", features = ["std"] }
