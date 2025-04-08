@@ -78,8 +78,10 @@ pub enum GearError {
 pub struct CyberGear<C: Can + 'static, A: CanFrameAdapter<C::Frame>> {
     can: &'static Mutex<CriticalSectionRawMutex, Option<C>>,
     adapter: A,
+    /// Host CAN ID
     host_id: u8,
-    can_id: u8,
+    /// Motor CAN ID
+    motor_id: u8,
     uuid: u64,
     homing: Homing,
     log_parameters: LogParameters,
@@ -122,7 +124,7 @@ where
         adapter: A,
     ) -> Self {
         Self {
-            can_id,
+            motor_id: can_id,
             adapter,
             host_id: 0x7D,
             direction: 1,
@@ -164,7 +166,7 @@ where
         unsafe {
             cyber_gear_can_init(frame);
             cyber_gear_set_can_id_host_can_id(frame, self.host_id as i32);
-            cyber_gear_set_can_id_target_can_id(frame, self.can_id as i32);
+            cyber_gear_set_can_id_target_can_id(frame, self.motor_id as i32);
             cyber_gear_set_can_id_communication_type(frame, can_type);
         }
     }
@@ -544,7 +546,7 @@ where
         );
 
         let control_params = cyber_gear_motion_control_t {
-            motor_can_id: self.can_id,
+            motor_can_id: self.motor_id,
             target_speed: speed,
             target_location: position * self.direction as f32,
             kd,
@@ -730,12 +732,14 @@ where
         Ok(())
     }
 
-    pub fn process_inframe(&mut self, frame: C::Frame) -> bool {
-        let frame_cyber = self.adapter.from_frame(frame);
+    pub fn process_inframe(&mut self, frame: &C::Frame) -> bool {
+        let frame_cyber = self.adapter.from_frame(&frame);
         let mut cybergear_frame = cyber_gear_can_t::from(frame_cyber);
-        let id = unsafe { cybergear_frame.can_id.value };
+        let id_bytes = unsafe { cybergear_frame.can_id.bytes };
 
-        if ((id & 0xFF00) >> 8) as u8 != self.can_id {
+        let id = u32::from_le_bytes(id_bytes);
+
+        if ((id & 0xFF00) >> 8) as u8 != self.motor_id {
             return false;
         }
         self.last_response = now();
@@ -931,6 +935,10 @@ where
         }
 
         Ok(())
+    }
+
+    pub(crate) fn get_status(&self) -> cyber_gear_motor_status_t {
+        self.status
     }
 
     fn status_error(&self) -> bool {

@@ -58,7 +58,7 @@ impl Frame for MockFrame {
 pub(crate) struct MockAdapter;
 
 impl CanFrameAdapter<MockFrame> for MockAdapter {
-    fn from_frame(&self, frame: MockFrame) -> CyberGearFrame {
+    fn from_frame(&self, frame: &MockFrame) -> CyberGearFrame {
         CyberGearFrame {
             id: frame.id,
             data: frame.data,

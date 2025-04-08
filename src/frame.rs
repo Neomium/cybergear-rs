@@ -73,5 +73,5 @@ impl From<CyberGearFrame> for cyber_gear_can_t {
 
 pub trait CanFrameAdapter<F: Frame> {
     fn to_frame(&self, frame: &CyberGearFrame) -> F;
-    fn from_frame(&self, frame: F) -> CyberGearFrame;
+    fn from_frame(&self, frame: &F) -> CyberGearFrame;
 }
