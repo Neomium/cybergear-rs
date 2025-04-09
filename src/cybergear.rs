@@ -12,7 +12,8 @@ use crate::bindings::{
     cyber_gear_can_t, cyber_gear_can_t__bindgen_ty_1, cyber_gear_can_t__bindgen_ty_2,
     cyber_gear_config_index_t_CONFIG_R_MECH_POS, cyber_gear_config_index_t_CONFIG_R_MECH_VEL,
     cyber_gear_config_index_t_CONFIG_R_TORQUE_FDB, cyber_gear_get_can_id_communication_type,
-    cyber_gear_motion_control_t, cyber_gear_motor_status_t, cyber_gear_parse_motor_status_frame,
+    cyber_gear_get_can_id_int_value, cyber_gear_get_can_id_target_id, cyber_gear_motion_control_t,
+    cyber_gear_motor_status_t, cyber_gear_parse_motor_status_frame,
     cyber_gear_read_write_parameter_index_t_PARAMETER_CUR_FILT_GAIN,
     cyber_gear_read_write_parameter_index_t_PARAMETER_CUR_KI,
     cyber_gear_read_write_parameter_index_t_PARAMETER_CUR_KP,
@@ -754,6 +755,24 @@ where
                         &mut cybergear_frame as *mut cyber_gear_can_t,
                     )
                 };
+                // According to documentation -> status feedback frame id B0-B7: host id
+                // and B8-B15: motor id, all other frames have it switched and cyber_gear_parse_motor_status_frame
+                // uses other notion
+                self.status.motor_can_id = unsafe {
+                    cyber_gear_get_can_id_int_value(
+                        &cybergear_frame as *const cyber_gear_can_t,
+                        8,
+                        8,
+                    ) as u8
+                };
+                self.status.host_can_id = unsafe {
+                    cyber_gear_get_can_id_int_value(
+                        &cybergear_frame as *const cyber_gear_can_t,
+                        0,
+                        8,
+                    ) as u8
+                };
+
                 self.last_response = now();
                 return true;
             }

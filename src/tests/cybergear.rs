@@ -1,9 +1,10 @@
 use crate::bindings::{
     cyber_gear_can_communication_type_t_COMMUNICATION_DISABLE_DEVICE, cyber_gear_can_t,
+    cyber_gear_can_t__bindgen_ty_1, cyber_gear_can_t__bindgen_ty_2,
+    cyber_gear_get_can_id_int_value,
 };
 use crate::cybergear::CyberGear;
 use crate::tests::mocks::{MockAdapter, MockCan, MockFrame};
-use core::f32::consts::PI;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
 static CAN_MUTEX: Mutex<CriticalSectionRawMutex, Option<MockCan>> =
@@ -74,7 +75,7 @@ async fn test_build_motion_control_frame() {
 #[tokio::test]
 async fn test_process_inframe() {
     let mock_frame = MockFrame {
-        id: 0x0240037D,
+        id: 0x0280037D,
         data: [0x00, 0x00, 0x5E, 0x91, 0xFF, 0x9F, 0x00, 0x00],
     };
 
@@ -83,11 +84,12 @@ async fn test_process_inframe() {
     let res = cyber_gear.process_inframe(&mock_frame);
     let status = cyber_gear.get_status();
 
-    assert_eq!(status.host_can_id, 0x7D);
+    // host id and motor id positions swapped in cyber_gear_protocol.c
     assert_eq!(status.motor_can_id, 0x03);
+    assert_eq!(status.host_can_id, 0x7D);
     assert_eq!(status.mode_type, 0x2);
 
-    let speed_val = mock_frame.data[2] as u16 | (mock_frame.data[3] as u16) << 8;
+    let speed_val = mock_frame.data[3] as u16 | (mock_frame.data[2] as u16) << 8;
     let speed = map_float(
         rebound_value(speed_val as i16, 32768) as f32,
         -32768.0,
@@ -95,9 +97,9 @@ async fn test_process_inframe() {
         -30.0,
         30.0,
     );
-    assert_eq!(status.current_speed, speed);
+    assert!((status.current_speed - speed).abs() < 0.001);
 
-    let torque_val = mock_frame.data[4] as u16 | (mock_frame.data[5] as u16) << 8;
+    let torque_val = mock_frame.data[5] as u16 | (mock_frame.data[4] as u16) << 8;
     let torque = map_float(
         rebound_value(torque_val as i16, 32768) as f32,
         -32768.0,
@@ -105,9 +107,27 @@ async fn test_process_inframe() {
         -12.0,
         12.0,
     );
-    assert_eq!(status.current_torque, torque);
+    assert!((status.current_torque - torque).abs() < 0.001);
 
     assert!(res);
+}
+
+#[test]
+fn test_can_id_get_int() {
+    let frame = cyber_gear_can_t {
+        can_id: cyber_gear_can_t__bindgen_ty_1 { value: 0x0240047d },
+        can_data: cyber_gear_can_t__bindgen_ty_2 {
+            bytes: [0x00, 0x00, 0x5E, 0x91, 0xFF, 0x9F, 0x00, 0x00],
+        },
+    };
+
+    let host_id =
+        unsafe { cyber_gear_get_can_id_int_value(&frame as *const cyber_gear_can_t, 8, 8) };
+    let motor_id =
+        unsafe { cyber_gear_get_can_id_int_value(&frame as *const cyber_gear_can_t, 0, 8) };
+
+    assert_eq!(host_id, 0x04);
+    assert_eq!(motor_id, 0x7d);
 }
 
 fn map_float(x: f32, in_min: f32, in_max: f32, out_min: f32, out_max: f32) -> f32 {
