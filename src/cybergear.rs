@@ -84,15 +84,15 @@ pub struct CyberGear<C: Can + 'static, A: CanFrameAdapter<C::Frame>> {
     /// Motor CAN ID
     motor_id: u8,
     uuid: u64,
-    homing: Homing,
+    pub homing: Homing,
     log_parameters: LogParameters,
 
-    target_position: f32,
+    pub target_position: f32,
 
     default_params: Parameters,
     current_params: Parameters,
 
-    last_cmd_sent: u32,
+    pub last_cmd_sent: u32,
     last_response: u32,
     last_status_frame_req: u32,
     last_status_frame_rec: u32,
