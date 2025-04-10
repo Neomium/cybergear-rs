@@ -97,7 +97,7 @@ pub struct CyberGear<C: Can + 'static, A: CanFrameAdapter<C::Frame>> {
     last_status_frame_req: u32,
     last_status_frame_rec: u32,
 
-    enabled: bool,
+    pub enabled: bool,
     logging_active: bool,
 
     can_send_error: u32,
