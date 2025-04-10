@@ -93,19 +93,19 @@ pub struct CyberGear<C: Can + 'static, A: CanFrameAdapter<C::Frame>> {
     current_params: Parameters,
 
     pub last_cmd_sent: u32,
-    last_response: u32,
-    last_status_frame_req: u32,
-    last_status_frame_rec: u32,
+    pub last_response: u32,
+    pub last_status_frame_req: u32,
+    pub last_status_frame_rec: u32,
 
     pub enabled: bool,
     logging_active: bool,
 
     can_send_error: u32,
-    fault_time: u32,
+    pub fault_time: u32,
 
-    wait_for_response: u32,
+    pub wait_for_response: u32,
 
-    current_mode: MotorMode,           // Custom type
+    pub current_mode: MotorMode,       // Custom type
     status: cyber_gear_motor_status_t, // Custom type
     direction: i32,
 
