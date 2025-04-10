@@ -12,8 +12,8 @@ use crate::bindings::{
     cyber_gear_can_t, cyber_gear_can_t__bindgen_ty_1, cyber_gear_can_t__bindgen_ty_2,
     cyber_gear_config_index_t_CONFIG_R_MECH_POS, cyber_gear_config_index_t_CONFIG_R_MECH_VEL,
     cyber_gear_config_index_t_CONFIG_R_TORQUE_FDB, cyber_gear_get_can_id_communication_type,
-    cyber_gear_get_can_id_int_value, cyber_gear_get_can_id_target_id, cyber_gear_motion_control_t,
-    cyber_gear_motor_status_t, cyber_gear_parse_motor_status_frame,
+    cyber_gear_get_can_id_int_value, cyber_gear_motion_control_t, cyber_gear_motor_status_t,
+    cyber_gear_parse_motor_status_frame,
     cyber_gear_read_write_parameter_index_t_PARAMETER_CUR_FILT_GAIN,
     cyber_gear_read_write_parameter_index_t_PARAMETER_CUR_KI,
     cyber_gear_read_write_parameter_index_t_PARAMETER_CUR_KP,
@@ -57,7 +57,7 @@ struct LogParameters {
 
 #[derive(Debug, Default)]
 #[allow(dead_code)]
-struct Homing {
+pub struct Homing {
     pub homing: u32,
     pub timeout: u32,
     pub current: f32,
@@ -66,7 +66,7 @@ struct Homing {
     pub is_homed: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Format)]
 pub enum GearError {
     CanWriteError,
 
