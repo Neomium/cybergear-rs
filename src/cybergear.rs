@@ -39,7 +39,7 @@ use embedded_can::{Frame, Id};
 
 #[derive(Debug, Default)]
 #[allow(dead_code)]
-struct LogParameters {
+pub struct LogParameters {
     pub last_rcv: u32,
     pub param_count: u16,
     pub freq: u16, // Hz
@@ -85,7 +85,7 @@ pub struct CyberGear<C: Can + 'static, A: CanFrameAdapter<C::Frame>> {
     motor_id: u8,
     uuid: u64,
     pub homing: Homing,
-    log_parameters: LogParameters,
+    pub log_parameters: LogParameters,
 
     pub target_position: f32,
 
@@ -107,7 +107,7 @@ pub struct CyberGear<C: Can + 'static, A: CanFrameAdapter<C::Frame>> {
 
     pub current_mode: MotorMode,       // Custom type
     status: cyber_gear_motor_status_t, // Custom type
-    direction: i32,
+    pub direction: i32,
 
     temperature: f32,
     voltage: f32,
