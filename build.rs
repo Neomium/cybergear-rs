@@ -19,36 +19,42 @@ fn main() {
     let target_mcu = if target.contains("esp32s3") {
         build.compiler("xtensa-esp32s3-elf-gcc");
         build.archiver("xtensa-esp32s3-elf-ar");
-        println!("cargo:warning=building for esp32s3 target");
-        "esp32s3"
+        println!("cargo:warning=building for esp32s3");
+        target.as_str()
     } else if target.contains("esp32") {
         build.compiler("xtensa-esp32-elf-gcc");
         build.archiver("xtensa-esp32-elf-ar");
-        println!("cargo:warning=building for esp32 target");
-        "esp32"
+        println!("cargo:warning=building for esp32");
+        target.as_str()
     } else {
-        ""
+        println!("cargo:warning=building for {}", target);
+        target.as_str()
     };
 
-    if build_dir.join("libCyberGearProtocol_esp32s3.a").exists() && target_mcu == "esp32s3" {
-        println!("cargo:warning=libCyberGearProtocol_esp32s3.a already exists, skipping build");
-        return;
-    } else if build_dir.join("libCyberGearProtocol_esp32.a").exists() && target_mcu == "esp32" {
-        println!("cargo:warning=libCyberGearProtocol_esp32.a already exists, skipping build");
-        return;
+    let target_lib = format!("libCyberGearProtocol_{}.a", target_mcu);
+
+    if build_dir.join(Path::new(target_lib.as_str())).exists() {
+        println!(
+            "cargo:warning={} already exists, skipping build",
+            target_lib
+        );
+    } else {
+        println!(
+            "cargo:warning=libCyberGearProtocol_{}.a does not exist, building",
+            target_mcu
+        );
     }
 
-    let lib_name = if target.contains("esp32s3") {
-        "CyberGearProtocol_esp32s3"
-    } else {
-        "CyberGearProtocol_esp32"
+    let lib_name = {
+        let out = format!("CyberGearProtocol_{}", target_mcu);
+        out
     };
 
-    build.compile(lib_name);
+    build.compile(lib_name.as_str());
 
     println!(
         "cargo:warning=finished building using {:?}",
-        build.get_compiler()
+        build.get_compiler().path()
     );
 
     println!("cargo:rustc-link-lib=static={lib_name}");
