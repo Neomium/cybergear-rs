@@ -956,6 +956,7 @@ where
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn get_status(&self) -> cyber_gear_motor_status_t {
         self.status
     }
