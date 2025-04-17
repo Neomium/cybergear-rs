@@ -31,6 +31,15 @@ fn main() {
         target.as_str()
     };
 
+    build.flag("-ffunction-sections");
+    build.flag("-fdata-sections");
+    build.flag("-O2");
+
+    if target_mcu.contains("esp32") {
+        build.flag("-mlongcalls");
+        build.flag("-mtext-section-literals");
+    }
+
     let target_lib = format!("libCyberGearProtocol_{}.a", target_mcu);
 
     if build_dir.join(Path::new(target_lib.as_str())).exists() {
