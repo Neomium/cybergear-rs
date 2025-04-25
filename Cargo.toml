@@ -5,7 +5,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-defmt = "0.3.10"
+defmt = "1.0.1"
 embassy-sync = "0.6.2"
 embassy-time = "0.4.0"
 embedded-can = "0.4.1"

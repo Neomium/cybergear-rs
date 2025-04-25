@@ -1,8 +1,10 @@
 use crate::bindings::{
     cyber_gear_can_t, cyber_gear_can_t__bindgen_ty_1, cyber_gear_can_t__bindgen_ty_2,
 };
+use defmt::Format;
 use embedded_can::{ExtendedId, Frame, Id};
 
+#[derive(Debug, Default, Format)]
 pub struct CyberGearFrame {
     pub id: u32,
     pub data: [u8; 8],

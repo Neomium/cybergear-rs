@@ -28,7 +28,7 @@ use crate::bindings::{
     cyber_gear_set_can_id_int_value, cyber_gear_set_can_id_target_can_id,
 };
 use crate::frame::{CanFrameAdapter, CyberGearFrame};
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::fmt::Debug;
 use defmt::{Format, error, info};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
@@ -36,6 +36,7 @@ use embassy_sync::mutex::Mutex;
 use embassy_time::{Instant, Timer};
 use embedded_can::nb::Can;
 use embedded_can::{Frame, Id};
+use nb::Error;
 
 #[derive(Debug, Default)]
 #[allow(dead_code)]
@@ -61,14 +62,16 @@ pub struct Homing {
     pub homing: u32,
     pub timeout: u32,
     pub current: f32,
+    pub hstate_change: u32,
     pub position: f32,
     pub state: MotorState,
     pub is_homed: bool,
+    pub home_found: bool,
 }
 
 #[derive(Debug, Format)]
-pub enum GearError {
-    CanWriteError,
+pub enum GearError<C: Can> {
+    CanWriteError(Error<C::Error>),
 
     MotorStateConversionError,
 
@@ -118,6 +121,7 @@ impl<C, A> CyberGear<C, A>
 where
     C: Can + 'static,
     A: CanFrameAdapter<C::Frame>,
+    <C as Can>::Error: Debug,
 {
     pub fn new(
         can_id: u8,
@@ -172,7 +176,7 @@ where
         }
     }
 
-    pub async fn init(&mut self) -> Result<(), GearError> {
+    pub async fn init(&mut self) -> Result<(), GearError<C>> {
         let mut frame = cyber_gear_can_t::new();
         self.init_frame(
             &mut frame as *mut cyber_gear_can_t,
@@ -185,7 +189,7 @@ where
         self.host_id = id;
     }
 
-    pub async fn set_mode(&mut self, mode: MotorMode) -> Result<(), GearError> {
+    pub async fn set_mode(&mut self, mode: MotorMode) -> Result<(), GearError<C>> {
         let mut frame = cyber_gear_can_t::new();
         self.init_frame(
             &mut frame as *mut cyber_gear_can_t,
@@ -201,7 +205,7 @@ where
         }
         self.send_frame(frame, false).await?;
         self.current_mode = mode;
-        info!("Change mode to: {:?}", mode);
+        info!("Changed mode to: {:?}", mode);
         Ok(())
     }
 
@@ -209,7 +213,7 @@ where
         self.direction = -self.direction;
     }
 
-    pub async fn enable(&mut self) -> Result<(), GearError> {
+    pub async fn enable(&mut self) -> Result<(), GearError<C>> {
         let mut frame = cyber_gear_can_t::new();
         self.init_frame(
             &mut frame as *mut cyber_gear_can_t,
@@ -226,7 +230,7 @@ where
         Ok(())
     }
 
-    pub async fn check_enabled(&mut self) -> Result<(), GearError> {
+    pub async fn check_enabled(&mut self) -> Result<(), GearError<C>> {
         let mut frame = cyber_gear_can_t::new();
         self.init_frame(
             &mut frame as *mut cyber_gear_can_t,
@@ -238,7 +242,7 @@ where
         Ok(())
     }
 
-    pub async fn clear_fault(&mut self) -> Result<(), GearError> {
+    pub async fn clear_fault(&mut self) -> Result<(), GearError<C>> {
         let mut frame = cyber_gear_can_t::new();
         self.init_frame(
             &mut frame as *mut cyber_gear_can_t,
@@ -254,7 +258,7 @@ where
         Ok(())
     }
 
-    pub async fn request_status_report(&mut self) -> Result<(), GearError> {
+    pub async fn request_status_report(&mut self) -> Result<(), GearError<C>> {
         let mut frame = cyber_gear_can_t::new();
 
         if self.enabled {
@@ -273,7 +277,7 @@ where
         Ok(())
     }
 
-    pub async fn disable(&mut self) -> Result<(), GearError> {
+    pub async fn disable(&mut self) -> Result<(), GearError<C>> {
         let mut frame = cyber_gear_can_t::new();
         self.init_frame(
             &mut frame as *mut cyber_gear_can_t,
@@ -285,7 +289,7 @@ where
         Ok(())
     }
 
-    pub async fn set_current_limit(&mut self, limit: f32) -> Result<(), GearError> {
+    pub async fn set_current_limit(&mut self, limit: f32) -> Result<(), GearError<C>> {
         let mut frame = cyber_gear_can_t::new();
         self.init_frame(
             &mut frame as *mut cyber_gear_can_t,
@@ -303,7 +307,7 @@ where
         Ok(())
     }
 
-    pub async fn set_speed_limit(&mut self, limit: f32) -> Result<(), GearError> {
+    pub async fn set_speed_limit(&mut self, limit: f32) -> Result<(), GearError<C>> {
         let mut frame = cyber_gear_can_t::new();
         self.init_frame(
             &mut frame as *mut cyber_gear_can_t,
@@ -321,7 +325,7 @@ where
         Ok(())
     }
 
-    pub async fn set_torque_limit(&mut self, limit: f32) -> Result<(), GearError> {
+    pub async fn set_torque_limit(&mut self, limit: f32) -> Result<(), GearError<C>> {
         let mut frame = cyber_gear_can_t::new();
         self.init_frame(
             &mut frame as *mut cyber_gear_can_t,
@@ -339,7 +343,7 @@ where
         Ok(())
     }
 
-    pub async fn set_ki(&mut self, ki: f32) -> Result<(), GearError> {
+    pub async fn set_ki(&mut self, ki: f32) -> Result<(), GearError<C>> {
         let mut frame = cyber_gear_can_t::new();
         self.init_frame(
             &mut frame as *mut cyber_gear_can_t,
@@ -359,7 +363,7 @@ where
         Ok(())
     }
 
-    pub async fn set_kp(&mut self, kp: f32) -> Result<(), GearError> {
+    pub async fn set_kp(&mut self, kp: f32) -> Result<(), GearError<C>> {
         let mut frame = cyber_gear_can_t::new();
         self.init_frame(
             &mut frame as *mut cyber_gear_can_t,
@@ -380,7 +384,7 @@ where
     }
 
     // No kd value for cyber gear?
-    pub fn set_kd(&mut self, kd: f32) -> Result<(), GearError> {
+    pub fn set_kd(&mut self, kd: f32) -> Result<(), GearError<C>> {
         //  let mut frame = cyber_gear_can_t::new();
         //  self.init_frame(
         //      &mut frame as *mut cyber_gear_can_t,
@@ -398,7 +402,7 @@ where
         Ok(())
     }
 
-    pub async fn set_filter_gain(&mut self, gain: f32) -> Result<(), GearError> {
+    pub async fn set_filter_gain(&mut self, gain: f32) -> Result<(), GearError<C>> {
         let mut frame = cyber_gear_can_t::new();
         self.init_frame(
             &mut frame as *mut cyber_gear_can_t,
@@ -418,7 +422,7 @@ where
         Ok(())
     }
 
-    pub async fn run_speed(&mut self, speed: f32) -> Result<(), GearError> {
+    pub async fn run_speed(&mut self, speed: f32) -> Result<(), GearError<C>> {
         if self.current_mode != MotorMode::Speed {
             self.set_mode(MotorMode::Speed).await?;
         }
@@ -439,7 +443,7 @@ where
         Ok(())
     }
 
-    pub async fn run_current(&mut self, current: f32) -> Result<(), GearError> {
+    pub async fn run_current(&mut self, current: f32) -> Result<(), GearError<C>> {
         if self.current_mode != MotorMode::Current {
             self.set_mode(MotorMode::Current).await?;
         }
@@ -463,7 +467,7 @@ where
         Ok(())
     }
 
-    pub async fn run_position_safe(&mut self, position: f32) -> Result<(), GearError> {
+    pub async fn run_position_safe(&mut self, position: f32) -> Result<(), GearError<C>> {
         if self.is_ready().await && self.homing.homing == 0 {
             return self.run_position(position).await;
         }
@@ -471,7 +475,7 @@ where
         Ok(())
     }
 
-    pub async fn run_position(&mut self, position: f32) -> Result<(), GearError> {
+    pub async fn run_position(&mut self, position: f32) -> Result<(), GearError<C>> {
         if self.current_mode != MotorMode::Position {
             self.set_mode(MotorMode::Position).await?;
         }
@@ -538,7 +542,7 @@ where
         torque: f32,
         kd: f32,
         kp: f32,
-    ) -> Result<(), GearError> {
+    ) -> Result<(), GearError<C>> {
         let mut frame = cyber_gear_can_t::new();
 
         self.init_frame(
@@ -565,9 +569,9 @@ where
         self.send_frame(frame, false).await
     }
 
-    pub async fn execute(&mut self, hstate_change_mut: &AtomicU32, found_home_mut: &AtomicBool) {
+    pub async fn execute(&mut self) {
         if now() - self.last_status_frame_rec > 100 {
-            let _ = self.request_status_report();
+            let _ = self.request_status_report().await;
         }
 
         // homing process:
@@ -583,79 +587,76 @@ where
         match self.homing.state {
             MotorState::Idle => {}
             MotorState::Start => {
-                self.set_current_limit(self.homing.current).await.unwrap();
-                self.set_speed_limit(4.0).await.unwrap();
-                self.run_speed(4.0).await.unwrap();
+                let _ = self.set_current_limit(self.homing.current).await;
+                let _ = self.set_speed_limit(4.0).await;
+                let _ = self.run_speed(4.0).await;
                 info!("Started homing");
-                hstate_change_mut.store(now(), Ordering::Relaxed);
+                self.homing.hstate_change = now();
+                self.homing.home_found = false;
                 self.homing.state = MotorState::Homing;
             }
             MotorState::Homing => {
                 if now() - self.log_parameters.last_rcv < 100 {
-                    if now() - hstate_change_mut.load(Ordering::Relaxed) > 1000
+                    if now() - self.homing.hstate_change > 1000
                         && self.log_parameters.vel.abs() < 0.1
                     {
-                        self.run_speed(0.0).await.unwrap();
+                        let _ = self.run_speed(0.0).await;
                         info!("Home position found");
-                        found_home_mut.store(true, Ordering::Relaxed);
+                        self.homing.home_found = true;
 
-                        self.homing.state = MotorState::Homing;
+                        self.homing.state = MotorState::HomeFound;
                     }
                 }
 
-                if now() - hstate_change_mut.load(Ordering::Relaxed) > self.homing.timeout {
+                if now() - self.homing.hstate_change > self.homing.timeout {
                     info!("Homing timeout");
                     self.homing.state = MotorState::Timeout;
                 }
             }
             MotorState::HomeFound => {
                 if self.set_zero().await.is_ok() {
-                    hstate_change_mut.store(now(), Ordering::Relaxed);
+                    self.homing.hstate_change = now();
                     self.homing.state = MotorState::Wait1;
                 }
             }
             MotorState::Wait1 => {
-                if now() - hstate_change_mut.load(Ordering::Relaxed) > 1500 {
-                    self.set_current_limit(4.0).await.unwrap();
-                    self.set_speed_limit(4.0).await.unwrap();
-                    self.run_position(self.target_position).await.unwrap();
+                if now() - self.homing.hstate_change > 1500 {
+                    let _ = self.set_current_limit(4.0).await;
+                    let _ = self.set_speed_limit(4.0).await;
+                    let _ = self.run_position(self.target_position).await;
                     self.homing.state = MotorState::MoveZero;
-                    hstate_change_mut.store(now(), Ordering::Relaxed);
+                    self.homing.hstate_change = now();
                 }
             }
             MotorState::MoveZero => {
-                if now() - hstate_change_mut.load(Ordering::Relaxed) > 1000
-                    && self.log_parameters.vel.abs() < 0.1
-                {
+                if now() - self.homing.hstate_change > 1000 && self.log_parameters.vel.abs() < 0.1 {
                     info!("Moved to target position");
                     self.homing.state = MotorState::End;
-                    hstate_change_mut.store(now(), Ordering::Relaxed);
+                    self.homing.hstate_change = now();
                 }
             }
             MotorState::Wait2 => {}
             MotorState::Timeout => {
-                self.run_speed(0.0).await.unwrap();
+                let _ = self.run_speed(0.0).await;
                 delay_ms(3u64).await;
-                self.set_zero().await.unwrap();
+                let _ = self.set_zero().await;
                 self.homing.state = MotorState::End;
             }
             MotorState::End => {
-                self.set_current_limit(self.default_params.current_limit)
-                    .await
-                    .unwrap();
-                self.set_speed_limit(self.default_params.speed_limit)
-                    .await
-                    .unwrap();
+                let _ = self
+                    .set_current_limit(self.default_params.current_limit)
+                    .await;
+                let _ = self.set_speed_limit(self.default_params.speed_limit).await;
                 self.homing.homing = 0;
-                self.homing.is_homed = found_home_mut.load(Ordering::Relaxed);
+                self.homing.is_homed = self.homing.home_found;
                 info!("Ending homing sequence");
             }
         }
 
         if self.can_send_error != 0 && now() - self.can_send_error > 2000 {
             info!("CAN error, restoring settings");
-            self.clear_fault().await.unwrap();
-            self.restore_config().await.unwrap();
+            let _ = self.clear_fault().await;
+            let _ = self.restore_config().await;
             self.homing.is_homed = false;
             self.can_send_error = 0;
         }
@@ -670,7 +671,7 @@ where
         kp: f32,
         kd: f32,
         filter_gain: f32,
-    ) -> Result<(), GearError> {
+    ) -> Result<(), GearError<C>> {
         self.default_params = Parameters {
             current_limit,
             speed_limit,
@@ -694,7 +695,7 @@ where
         Ok(())
     }
 
-    pub async fn set_zero(&mut self) -> Result<(), GearError> {
+    pub async fn set_zero(&mut self) -> Result<(), GearError<C>> {
         let mut frame = cyber_gear_can_t::new();
         self.init_frame(
             &mut frame as *mut cyber_gear_can_t,
@@ -708,7 +709,7 @@ where
         self.send_frame(frame, false).await
     }
 
-    pub async fn restore_config(&mut self) -> Result<(), GearError> {
+    pub async fn restore_config(&mut self) -> Result<(), GearError<C>> {
         self.set_current_limit(self.current_params.current_limit)
             .await?;
         self.set_speed_limit(self.current_params.speed_limit)
@@ -765,6 +766,7 @@ where
                         8,
                     ) as u8
                 };
+
                 self.status.host_can_id = unsafe {
                     cyber_gear_get_can_id_int_value(
                         &cybergear_frame as *const cyber_gear_can_t,
@@ -933,15 +935,19 @@ where
         }
     }
 
-    async fn send_frame(&mut self, frame: cyber_gear_can_t, log: bool) -> Result<(), GearError> {
+    async fn send_frame(&mut self, frame: cyber_gear_can_t, log: bool) -> Result<(), GearError<C>> {
         let cybergear_frame = CyberGearFrame::from(frame);
         let hal_frame = self.adapter.to_frame(&cybergear_frame);
-        let mut lock = self.can.lock().await;
-        lock.as_mut()
-            .unwrap()
-            .transmit(&hal_frame)
-            .map_err(|_| GearError::CanWriteError)?;
+        {
+            let mut lock = self.can.lock().await;
 
+            lock.as_mut().unwrap().transmit(&hal_frame).map_err(|e| {
+                error!("failed sending CAN frame {:?}", defmt::Debug2Format(&e));
+                self.can_send_error = now();
+                self.last_cmd_sent = now();
+                GearError::CanWriteError(e)
+            })?;
+        }
         self.last_cmd_sent = now();
 
         let id_raw = match hal_frame.id() {
