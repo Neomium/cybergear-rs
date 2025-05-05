@@ -1,30 +1,31 @@
 //
 // Created by Eric Wu on 2023/9/4.
 //
-
 #include <string.h>
 #include <stdio.h>
 #include <assert.h>
 #include <limits.h>
 #include <stdlib.h>
 
-#include <libcybergear/cyber_gear_protocol.h>
-#include "utils.h"
+#include <cyber_gear_protocol.h>
+#include <utils.h>
 #include "float16.h"
 
-// CAN ID 通讯类型比特位偏移
+// CAN ID communication type bit offset
 #define kCAN_ID_COMM_TYPE_BIT_OFFSET (24)
-// CAN ID 通讯类型比特长度
+// CAN ID communication type bit length
 #define kCAN_ID_COMM_TYPE_LENGTH (5)
-
-// CAN ID 主机ID比特位偏移
+// CAN ID communication type variant bit offset
+#define kCAN_ID_COMM_TYPE_VARIANT_BIT_OFFSET (16)
+// CAN ID communication type variant bit length
+#define kCAN_ID_COMM_TYPE_VARIANT_LENGTH (8)
+// CAN ID host ID bit offset
 #define kCAN_ID_HOST_CAN_ID_BIT_OFFSET (8)
-// CAN ID 主机ID比特长度
+// CAN ID host ID bit length
 #define kCAN_ID_HOST_CAN_ID_LENGTH (8)
-
-// CAN ID 目标ID比特位偏移
+// CAN ID target ID bit offset
 #define kCAN_ID_TARGET_CAN_ID_BIT_OFFSET (0)
-// CAN ID 目标ID比特长度
+// CAN ID target ID bit length
 #define kCAN_ID_TARGET_CAN_ID_LENGTH (8)
 
 #define kM_PI (3.14159265358979323846264338327950288)
@@ -40,7 +41,7 @@ typedef union {
     uint8_t bytes[4];
 } uint64_memory_t;
 
-static float map(float x, float in_min, float in_max, float out_min, float out_max) {
+static float mapfloat(float x, float in_min, float in_max, float out_min, float out_max) {
     return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
@@ -70,18 +71,12 @@ int cyber_gear_get_can_id_int_value(const cyber_gear_can_t * const frame, int bi
     return (int)read_value.value;
 }
 
-void cyber_gear_can_dump(const cyber_gear_can_t * const frame) {
-    printf("CAN_ID[3,0]: %02X %02X %02X %02X\n\tNUM:%02X%02X%02X%02X\nCAN_DATA[7,0]: %02X %02X %02X %02X %02X %02X %02X %02X\n\tNUM:%02X%02X%02X%02X%02X%02X%02X%02X\n\tcansend: cansend can0 %02X%02X%02X%02X#%02X%02X%02X%02X%02X%02X%02X%02X\n",
-           frame->can_id.bytes[3], frame->can_id.bytes[2], frame->can_id.bytes[1], frame->can_id.bytes[0],
-           frame->can_id.bytes[3], frame->can_id.bytes[2], frame->can_id.bytes[1], frame->can_id.bytes[0],
-           frame->can_data.bytes[0], frame->can_data.bytes[1], frame->can_data.bytes[2], frame->can_data.bytes[3], frame->can_data.bytes[4], frame->can_data.bytes[5], frame->can_data.bytes[6], frame->can_data.bytes[7],
-           frame->can_data.bytes[0], frame->can_data.bytes[1], frame->can_data.bytes[2], frame->can_data.bytes[3], frame->can_data.bytes[4], frame->can_data.bytes[5], frame->can_data.bytes[6], frame->can_data.bytes[7],
-           frame->can_id.bytes[3], frame->can_id.bytes[2], frame->can_id.bytes[1], frame->can_id.bytes[0],
-           frame->can_data.bytes[0], frame->can_data.bytes[1], frame->can_data.bytes[2], frame->can_data.bytes[3], frame->can_data.bytes[4], frame->can_data.bytes[5], frame->can_data.bytes[6], frame->can_data.bytes[7]);
-}
-
 void cyber_gear_set_can_id_communication_type(const cyber_gear_can_t *frame, cyber_gear_can_communication_type_t type) {
     cyber_gear_set_can_id_int_value(frame, kCAN_ID_COMM_TYPE_BIT_OFFSET, kCAN_ID_COMM_TYPE_LENGTH, (int)type);
+}
+
+void cyber_gear_set_can_id_communication_type_variant(const cyber_gear_can_t *frame, uint8_t type) {
+    cyber_gear_set_can_id_int_value(frame, kCAN_ID_COMM_TYPE_VARIANT_BIT_OFFSET, kCAN_ID_COMM_TYPE_VARIANT_LENGTH, (int)type);
 }
 
 void cyber_gear_set_can_id_host_can_id(const cyber_gear_can_t *frame, int value) {
@@ -96,11 +91,11 @@ void cyber_gear_build_motion_control_frame(const cyber_gear_can_t *frame, const 
     cyber_gear_set_can_id_target_can_id(frame, control_param.motor_can_id);
     cyber_gear_set_can_id_communication_type(frame, COMMUNICATION_MOTION_CONTROL_COMMAND);
     
-    uint16_t torque = (uint16_t)map(control_param.torque, -12, 12, 0, 65535);
-    uint16_t location = (uint16_t)map(control_param.target_location, -4 * kM_PI, 4 * kM_PI, 0, 65535);
-    uint16_t speed = (uint16_t)map(control_param.target_speed, -30, 30, 0, 65535);
-    uint16_t kp = (uint16_t)map(control_param.kp, 0, 500, 0, 65535);
-    uint16_t kd = (uint16_t)map(control_param.kd, 0, 5, 0, 65535);
+    uint16_t torque = (uint16_t)mapfloat(control_param.torque, -12, 12, 0, 65535);
+    uint16_t location = (uint16_t)mapfloat(control_param.target_location, -4 * kM_PI, 4 * kM_PI, 0, 65535);
+    uint16_t speed = (uint16_t)mapfloat(control_param.target_speed, -30, 30, 0, 65535);
+    uint16_t kp = (uint16_t)mapfloat(control_param.kp, 0, 500, 0, 65535);
+    uint16_t kd = (uint16_t)mapfloat(control_param.kd, 0, 5, 0, 65535);
     
     bit_value_t setting_value = {0};
     setting_value.value = bit_utils_swap_host_endian_value_into_little_endian16(location);
@@ -206,7 +201,7 @@ cyber_gear_single_parameter_t cyber_gear_parse_parameter_read_frame(const cyber_
     
     int index = bit_utils_swap_little_endian_value_into_host_endian16(index_raw.value);
     
-    cyber_gear_read_write_parameter_index_t param_index = index;
+    cyber_gear_read_write_parameter_index_t param_index = (cyber_gear_read_write_parameter_index_t) index;
     
     bit_value_t param_raw = bit_utils_get_value(source,
                                                 sizeof(frame->can_data.bytes),
@@ -228,11 +223,11 @@ cyber_gear_can_communication_type_t cyber_gear_get_can_id_communication_type(con
     return (cyber_gear_can_communication_type_t)cyber_gear_get_can_id_int_value(frame, 24, 5);
 }
 
-int cyber_gear_get_can_id_target_id(const cyber_gear_can_t * const frame) {
+uint8_t cyber_gear_get_can_id_target_id(const cyber_gear_can_t * const frame) {
     return cyber_gear_get_can_id_int_value(frame, 0, 8);
 }
 
-int cyber_gear_get_can_id_host_id(const cyber_gear_can_t * const frame) {
+uint8_t cyber_gear_get_can_id_host_id(const cyber_gear_can_t * const frame) {
     return cyber_gear_get_can_id_int_value(frame, 8, 8);
 }
 
@@ -257,46 +252,46 @@ cyber_gear_motor_status_t cyber_gear_parse_motor_status_frame(const cyber_gear_c
                                                    0 * CHAR_BIT,
                                                    2 * CHAR_BIT);
     bit16_value_t location_raw_16_bit = {
-        .value = location_raw.value
+        .value = (uint16_t) location_raw.value
     };
     int16_t location_value = (int16_t)bit_utils_swap_big_endian_value_into_host_endian16(location_raw_16_bit.value);
-    float location = map((int16_t)rebound_value(location_value, 32768), -32768.0, 32767.0, -4 * kM_PI, 4 * kM_PI);
+    float location = mapfloat((int16_t)rebound_value(location_value, 32768), -32768.0, 32767.0, -4 * kM_PI, 4 * kM_PI);
     
     bit_value_t speed_raw = bit_utils_get_value(source,
                                                 sizeof(frame->can_data.bytes),
                                                 2 * CHAR_BIT,
                                                 2 * CHAR_BIT);
     bit16_value_t speed_raw_16_bit = {
-        .value = speed_raw.value
+        .value = (uint16_t) speed_raw.value
     };
     int16_t speed_value = (int16_t)bit_utils_swap_big_endian_value_into_host_endian16(speed_raw_16_bit.value);
-    float speed = map((int16_t)rebound_value(speed_value, 32768), -32768.0, 32767.0, -30, 30);
+    float speed = mapfloat((int16_t)rebound_value(speed_value, 32768), -32768.0, 32767.0, -30, 30);
     
     bit_value_t torque_raw = bit_utils_get_value(source,
                                                  sizeof(frame->can_data.bytes),
                                                  4 * CHAR_BIT,
                                                  2 * CHAR_BIT);
     bit16_value_t torque_raw_16_bit = {
-        .value = torque_raw.value
+        .value = (uint16_t) torque_raw.value
     };
     int16_t torque_value = (int16_t)bit_utils_swap_big_endian_value_into_host_endian16(torque_raw_16_bit.value);
-    float torque = map((int16_t)rebound_value(torque_value, 32768), -32768.0, 32767.0, -12, 12);
+    float torque = mapfloat((int16_t)rebound_value(torque_value, 32768), -32768.0, 32767.0, -12, 12);
     
     bit_value_t temperature_raw = bit_utils_get_value(source,
                                                       sizeof(frame->can_data.bytes),
                                                       6 * CHAR_BIT,
                                                       2 * CHAR_BIT);
     bit16_value_t temperature_raw_16_bit = {
-        .value = temperature_raw.value
+        .value = (uint16_t) temperature_raw.value
     };
     float temperature = bit_utils_swap_big_endian_value_into_host_endian16(temperature_raw_16_bit.value) / 10.0;
     
     cyber_gear_motor_status_t motor_status = {
+        .host_can_id = (uint8_t) cyber_gear_get_can_id_int_value(frame, 8, 8),
         .motor_can_id = cyber_gear_get_can_id_target_id(frame),
-        .host_can_id = cyber_gear_get_can_id_int_value(frame, 8, 8),
+        .current_torque = torque,
         .current_location = location,
         .current_speed = speed,
-        .current_torque = torque,
         .current_temperature = temperature,
         .has_calibration_error = cyber_gear_get_can_id_int_value(frame, 21, 1),
         .has_hall_encode_error = cyber_gear_get_can_id_int_value(frame, 20, 1),
@@ -304,7 +299,7 @@ cyber_gear_motor_status_t cyber_gear_parse_motor_status_frame(const cyber_gear_c
         .has_over_temperature = cyber_gear_get_can_id_int_value(frame, 18, 1),
         .has_over_current = cyber_gear_get_can_id_int_value(frame, 17, 1),
         .has_undervoltage = cyber_gear_get_can_id_int_value(frame, 16, 1),
-        .mode_type = cyber_gear_get_can_id_int_value(frame, 22, 2),
+        .mode_type = (cyber_gear_motor_mode_t ) cyber_gear_get_can_id_int_value(frame, 22, 2),
     };
     
     return motor_status;
@@ -329,6 +324,3 @@ void cyber_gear_build_set_can_id_frame(const cyber_gear_can_t * frame, int setti
                         sizeof(frame->can_id.bytes));
 }
 
-void cyber_gear_dump_motor_status_frame(const cyber_gear_motor_status_t status) {
-    printf("[MOTOR STATUS]:\n\thost can id %d\n\tmotor can id %d\n\ttorque %f\n\tlocation %f\n\tspeed %f\n\ttemp %f\n", status.host_can_id, status.motor_can_id, status.current_torque, status.current_location, status.current_speed, status.current_temperature);
-}

@@ -4,6 +4,7 @@ use crate::bindings::{
     cyber_gear_can_communication_type_t_COMMUNICATION_DISABLE_DEVICE,
     cyber_gear_can_communication_type_t_COMMUNICATION_ENABLE_DEVICE,
     cyber_gear_can_communication_type_t_COMMUNICATION_FETCH_DEVICE_ID,
+    cyber_gear_can_communication_type_t_COMMUNICATION_LOGGING,
     cyber_gear_can_communication_type_t_COMMUNICATION_MOTION_CONTROL_COMMAND,
     cyber_gear_can_communication_type_t_COMMUNICATION_READ_SINGLE_PARAM,
     cyber_gear_can_communication_type_t_COMMUNICATION_SET_MECHANICAL_ZERO_POSITION,
@@ -12,8 +13,7 @@ use crate::bindings::{
     cyber_gear_can_t, cyber_gear_can_t__bindgen_ty_1, cyber_gear_can_t__bindgen_ty_2,
     cyber_gear_config_index_t_CONFIG_R_MECH_POS, cyber_gear_config_index_t_CONFIG_R_MECH_VEL,
     cyber_gear_config_index_t_CONFIG_R_TORQUE_FDB, cyber_gear_get_can_id_communication_type,
-    cyber_gear_get_can_id_int_value, cyber_gear_motion_control_t, cyber_gear_motor_status_t,
-    cyber_gear_parse_motor_status_frame,
+    cyber_gear_motion_control_t, cyber_gear_motor_status_t, cyber_gear_parse_motor_status_frame,
     cyber_gear_read_write_parameter_index_t_PARAMETER_CUR_FILT_GAIN,
     cyber_gear_read_write_parameter_index_t_PARAMETER_CUR_KI,
     cyber_gear_read_write_parameter_index_t_PARAMETER_CUR_KP,
@@ -24,12 +24,12 @@ use crate::bindings::{
     cyber_gear_read_write_parameter_index_t_PARAMETER_LOC_REF,
     cyber_gear_read_write_parameter_index_t_PARAMETER_RUN_MODE,
     cyber_gear_read_write_parameter_index_t_PARAMETER_SPD_REF,
-    cyber_gear_set_can_id_communication_type, cyber_gear_set_can_id_host_can_id,
-    cyber_gear_set_can_id_int_value, cyber_gear_set_can_id_target_can_id,
+    cyber_gear_set_can_id_communication_type, cyber_gear_set_can_id_communication_type_variant,
+    cyber_gear_set_can_id_host_can_id, cyber_gear_set_can_id_target_can_id,
 };
 use crate::frame::{CanFrameAdapter, CyberGearFrame};
 use core::fmt::Debug;
-use defmt::{Format, error, info};
+use defmt::{Debug2Format, Format, Formatter, error, info, warn, write};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
 #[cfg(not(test))]
@@ -69,13 +69,31 @@ pub struct Homing {
     pub home_found: bool,
 }
 
-#[derive(Debug, Format)]
-pub enum GearError<C: Can> {
+#[derive(Debug, Copy, Clone)]
+pub enum GearError<C>
+where
+    C: Can,
+    C::Error: Debug,
+{
     CanWriteError(Error<C::Error>),
 
     MotorStateConversionError,
 
     StartLoggingError,
+}
+
+impl<C> Format for GearError<C>
+where
+    C: Can,
+    C::Error: Debug,
+{
+    fn format(&self, fmt: Formatter) {
+        match self {
+            Self::CanWriteError(e) => write!(fmt, "CanWriteError: {:?}", Debug2Format(&e)),
+            Self::MotorStateConversionError => write!(fmt, "MotorStateConversionError"),
+            Self::StartLoggingError => write!(fmt, "StartLoggingError"),
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -255,10 +273,15 @@ where
         if self.enabled {
             self.enable().await?;
         }
+        info!("Fault cleared");
         Ok(())
     }
 
-    pub async fn request_status_report(&mut self) -> Result<(), GearError<C>> {
+    pub async fn request_status_report(&mut self) -> bool {
+        if now() - self.last_status_frame_req < 100 {
+            return false;
+        }
+
         let mut frame = cyber_gear_can_t::new();
 
         if self.enabled {
@@ -272,9 +295,12 @@ where
                 cyber_gear_can_communication_type_t_COMMUNICATION_DISABLE_DEVICE,
             );
         }
-        self.send_frame(frame, false).await?;
-        self.last_status_frame_req = now();
-        Ok(())
+
+        if self.send_frame(frame, false).await.is_ok() {
+            self.last_status_frame_req = now();
+            return true;
+        }
+        false
     }
 
     pub async fn disable(&mut self) -> Result<(), GearError<C>> {
@@ -285,7 +311,7 @@ where
         );
         self.send_frame(frame, false).await?;
         self.enabled = false;
-        // Todo: add stop logging
+        self.stop_logging().await;
         Ok(())
     }
 
@@ -302,9 +328,8 @@ where
                 limit,
             );
         }
-        self.send_frame(frame, false).await?;
         self.current_params.current_limit = limit;
-        Ok(())
+        self.send_frame(frame, false).await
     }
 
     pub async fn set_speed_limit(&mut self, limit: f32) -> Result<(), GearError<C>> {
@@ -320,9 +345,8 @@ where
                 limit,
             );
         }
-        self.send_frame(frame, false).await?;
         self.current_params.speed_limit = limit;
-        Ok(())
+        self.send_frame(frame, false).await
     }
 
     pub async fn set_torque_limit(&mut self, limit: f32) -> Result<(), GearError<C>> {
@@ -338,9 +362,8 @@ where
                 limit,
             );
         }
-        self.send_frame(frame, false).await?;
         self.current_params.torque_limit = limit;
-        Ok(())
+        self.send_frame(frame, false).await
     }
 
     pub async fn set_ki(&mut self, ki: f32) -> Result<(), GearError<C>> {
@@ -358,9 +381,8 @@ where
             );
         }
 
-        self.send_frame(frame, false).await?;
         self.current_params.ki = ki;
-        Ok(())
+        self.send_frame(frame, false).await
     }
 
     pub async fn set_kp(&mut self, kp: f32) -> Result<(), GearError<C>> {
@@ -378,9 +400,8 @@ where
             );
         }
 
-        self.send_frame(frame, false).await?;
         self.current_params.kp = kp;
-        Ok(())
+        self.send_frame(frame, false).await
     }
 
     // No kd value for cyber gear?
@@ -417,9 +438,8 @@ where
             );
         }
 
-        self.send_frame(frame, false).await?;
         self.current_params.filter_gain = gain;
-        Ok(())
+        self.send_frame(frame, false).await
     }
 
     pub async fn run_speed(&mut self, speed: f32) -> Result<(), GearError<C>> {
@@ -435,12 +455,10 @@ where
             cyber_gear_build_parameter_write_frame_with_float_value(
                 &mut frame as *mut cyber_gear_can_t,
                 cyber_gear_read_write_parameter_index_t_PARAMETER_SPD_REF,
-                speed,
+                speed * self.direction as f32,
             );
         }
-        self.send_frame(frame, false).await?;
-        self.current_params.speed = speed;
-        Ok(())
+        self.send_frame(frame, false).await
     }
 
     pub async fn run_current(&mut self, current: f32) -> Result<(), GearError<C>> {
@@ -458,13 +476,11 @@ where
             cyber_gear_build_parameter_write_frame_with_float_value(
                 &mut frame as *mut cyber_gear_can_t,
                 cyber_gear_read_write_parameter_index_t_PARAMETER_IQ_REF,
-                current,
+                current * self.direction as f32,
             );
         }
 
-        self.send_frame(frame, false).await?;
-        self.current_params.speed = current;
-        Ok(())
+        self.send_frame(frame, false).await
     }
 
     pub async fn run_position_safe(&mut self, position: f32) -> Result<(), GearError<C>> {
@@ -516,7 +532,7 @@ where
                     self.status.has_magnetic_encoding_error,
                 );
 
-                delay_ms(5u64).await;
+                delay_ms(5).await;
 
                 if let Err(_e) = self.clear_fault().await {
                     error!("CyberGear clear_fault error");
@@ -532,7 +548,7 @@ where
             return true;
         }
 
-        self.request_status_report().await.is_ok()
+        self.request_status_report().await
     }
 
     pub async fn run_op(
@@ -570,9 +586,7 @@ where
     }
 
     pub async fn execute(&mut self) {
-        if now() - self.last_status_frame_rec > 100 {
-            let _ = self.request_status_report().await;
-        }
+        let _ = self.request_status_report().await;
 
         // homing process:
         // 0. logging for speed and force feedback needs to be enabled
@@ -583,7 +597,7 @@ where
         // 5. move to requested/current target position with medium speed.
         // 6. restore the old current and speed settings
         // error handling. on timeout stop the motor and set the current position as zero, as the motor will otherwise rewind to its starting position on the next position command
-
+        //info!("homing state: {:?}", self.homing.state);
         match self.homing.state {
             MotorState::Idle => {}
             MotorState::Start => {
@@ -648,13 +662,14 @@ where
                     .await;
                 let _ = self.set_speed_limit(self.default_params.speed_limit).await;
                 self.homing.homing = 0;
+                self.homing.state = MotorState::Idle;
                 self.homing.is_homed = self.homing.home_found;
                 info!("Ending homing sequence");
             }
         }
 
         if self.can_send_error != 0 && now() - self.can_send_error > 2000 {
-            info!("CAN error, restoring settings");
+            warn!("CAN error, restoring settings");
             let _ = self.clear_fault().await;
             let _ = self.restore_config().await;
             self.homing.is_homed = false;
@@ -686,12 +701,12 @@ where
         self.set_current_limit(current_limit).await?;
         self.set_speed_limit(speed_limit).await?;
         self.set_torque_limit(torque_limit).await?;
-        delay_ms(5u64).await;
+        delay_ms(5).await;
         self.set_kp(kp).await?;
         self.set_ki(ki).await?;
         self.set_kd(kd)?;
         self.set_filter_gain(filter_gain).await?;
-        delay_ms(50u64).await;
+        delay_ms(50).await;
         Ok(())
     }
 
@@ -717,7 +732,7 @@ where
         self.set_torque_limit(self.current_params.torque_limit)
             .await?;
 
-        delay_ms(5u64).await;
+        delay_ms(5).await;
 
         self.set_kp(self.current_params.kp).await?;
         self.set_ki(self.current_params.ki).await?;
@@ -726,7 +741,7 @@ where
             .await?;
         self.set_mode(self.current_mode).await?;
 
-        delay_ms(5u64).await;
+        delay_ms(5).await;
 
         if self.enabled {
             self.enable().await?;
@@ -734,7 +749,7 @@ where
         Ok(())
     }
 
-    pub fn process_inframe(&mut self, frame: &C::Frame) -> bool {
+    pub async fn process_inframe(&mut self, frame: &C::Frame) -> bool {
         let frame_cyber = self.adapter.from_frame(&frame);
         let mut cybergear_frame = cyber_gear_can_t::from(frame_cyber);
         let id_bytes = unsafe { cybergear_frame.can_id.bytes };
@@ -756,27 +771,69 @@ where
                         &mut cybergear_frame as *mut cyber_gear_can_t,
                     )
                 };
-                // According to documentation -> status feedback frame id B0-B7: host id
-                // and B8-B15: motor id, all other frames have it switched and cyber_gear_parse_motor_status_frame
-                // uses other notion
-                self.status.motor_can_id = unsafe {
-                    cyber_gear_get_can_id_int_value(
-                        &cybergear_frame as *const cyber_gear_can_t,
-                        8,
-                        8,
-                    ) as u8
-                };
 
-                self.status.host_can_id = unsafe {
-                    cyber_gear_get_can_id_int_value(
-                        &cybergear_frame as *const cyber_gear_can_t,
-                        0,
-                        8,
-                    ) as u8
-                };
-
-                self.last_response = now();
+                self.last_status_frame_rec = now();
                 return true;
+            }
+            _ if comm_type == cyber_gear_can_communication_type_t_COMMUNICATION_LOGGING
+                && (id & 0x0F_00_00) >> 16 == 0x02 =>
+            {
+                let frame_number = ((id & 0xF0_00_00) >> 20) as u8;
+                if !self.logging_active {
+                    let _ = self.stop_logging().await;
+                    return true;
+                }
+
+                if frame_number != self.log_parameters.expected_frame_number {
+                    self.log_parameters.expected_frame_number = 0;
+                } else {
+                    match frame_number {
+                        0 => {
+                            self.log_parameters.last_rcv = now();
+                            let mut float_slice = [0u8; 4];
+                            float_slice
+                                .copy_from_slice(unsafe { &cybergear_frame.can_data.bytes[2..6] });
+                            self.log_parameters.param_slot_value[0] =
+                                f32::from_le_bytes(float_slice);
+                            self.log_parameters.data_buffer[..2]
+                                .copy_from_slice(unsafe { &cybergear_frame.can_data.bytes[6..] });
+
+                            if self.log_parameters.param_count > 1 {
+                                self.log_parameters.expected_frame_number = 1;
+                            }
+                        }
+                        _ if frame_number > 0 => {
+                            self.log_parameters.data_buffer[2..]
+                                .copy_from_slice(unsafe { &cybergear_frame.can_data.bytes[0..2] });
+                            self.log_parameters.param_slot_value[(frame_number as usize * 2) - 1] =
+                                f32::from_le_bytes(self.log_parameters.data_buffer);
+
+                            if self.log_parameters.param_count
+                                > (frame_number as usize * 2 - 1) as u16
+                            {
+                                let mut float_slice = [0u8; 4];
+                                float_slice.copy_from_slice(unsafe {
+                                    &cybergear_frame.can_data.bytes[2..6]
+                                });
+                                self.log_parameters.param_slot_value[frame_number as usize * 2] =
+                                    f32::from_le_bytes(float_slice);
+
+                                self.log_parameters.data_buffer[..2].copy_from_slice(unsafe {
+                                    &cybergear_frame.can_data.bytes[6..8]
+                                });
+                            }
+
+                            self.log_parameters.expected_frame_number = 0;
+
+                            if self.log_parameters.param_count
+                                > (frame_number as usize * 2 + 1) as u16
+                            {
+                                self.log_parameters.expected_frame_number = frame_number + 1;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
             }
             _ if comm_type == cyber_gear_can_communication_type_t_COMMUNICATION_FETCH_DEVICE_ID => {
                 if self.uuid == 0 {
@@ -805,7 +862,7 @@ where
     }
 
     pub fn home(&mut self, timeout: u32, current: f32) {
-        self.homing.state = MotorState::Homing;
+        self.homing.state = MotorState::Start;
         self.homing.homing = now();
         self.homing.timeout = timeout;
         self.homing.current = current;
@@ -824,8 +881,10 @@ where
         self.log_parameters.param_slot_pid[2] = cyber_gear_config_index_t_CONFIG_R_MECH_POS as u16;
         self.log_parameters.param_slot_value[2] = self.log_parameters.pos;
 
-        // 21 is custom COMMUNICATION_LOGGING type value
-        self.init_frame(&mut frame1 as *mut cyber_gear_can_t, 21);
+        self.init_frame(
+            &mut frame1 as *mut cyber_gear_can_t,
+            cyber_gear_can_communication_type_t_COMMUNICATION_LOGGING,
+        );
         let bytes = [
             self.log_parameters.freq as u8,
             (self.log_parameters.freq >> 8) as u8,
@@ -840,20 +899,21 @@ where
         frame1.can_data.bytes = bytes.clone();
 
         if self.send_frame(frame1, true).await.is_ok() {
-            delay_ms(10u64).await;
+            delay_ms(10).await;
             let mut frame2 = cyber_gear_can_t::new();
-            self.init_frame(&mut frame2 as *mut cyber_gear_can_t, 21);
+            self.init_frame(
+                &mut frame2 as *mut cyber_gear_can_t,
+                cyber_gear_can_communication_type_t_COMMUNICATION_LOGGING,
+            );
 
             frame2.can_data.bytes = bytes.clone();
 
             let comm_type_variant = 0x01 + ((self.log_parameters.param_count - 1) << 4) as u8;
 
             unsafe {
-                cyber_gear_set_can_id_int_value(
+                cyber_gear_set_can_id_communication_type_variant(
                     &mut frame2 as *mut cyber_gear_can_t,
-                    16,
-                    8,
-                    comm_type_variant as i32,
+                    comm_type_variant,
                 );
             }
 
@@ -865,30 +925,24 @@ where
                 delay_ms(10u64).await;
                 let mut frame3 = cyber_gear_can_t::new();
 
-                self.init_frame(&mut frame3 as *mut cyber_gear_can_t, 21);
+                self.init_frame(
+                    &mut frame3 as *mut cyber_gear_can_t,
+                    cyber_gear_can_communication_type_t_COMMUNICATION_LOGGING,
+                );
 
                 frame3.can_data.bytes = bytes.clone();
 
-                let comm_type_variant = 0x05 + ((self.log_parameters.param_count - 1) << 4) as u8;
-
-                if self.log_parameters.param_count > 4 {
-                    unsafe {
-                        cyber_gear_set_can_id_int_value(
-                            &mut frame3 as *mut cyber_gear_can_t,
-                            16,
-                            8,
-                            comm_type_variant as i32,
-                        );
-                    }
+                let comm_type_variant = if self.log_parameters.param_count > 4 {
+                    0x05 + ((self.log_parameters.param_count - 1) << 4) as u8
                 } else {
-                    unsafe {
-                        cyber_gear_set_can_id_int_value(
-                            &mut frame3 as *mut cyber_gear_can_t,
-                            16,
-                            8,
-                            0x02,
-                        );
-                    }
+                    0x02
+                };
+
+                unsafe {
+                    cyber_gear_set_can_id_communication_type_variant(
+                        &mut frame3 as *mut cyber_gear_can_t,
+                        comm_type_variant,
+                    );
                 }
 
                 for i in 4..8 {
@@ -908,13 +962,14 @@ where
     pub async fn stop_logging(&mut self) -> bool {
         info!("Stopping logging");
         let mut cyber_gear_frame = cyber_gear_can_t::new();
-        self.init_frame(&mut cyber_gear_frame as *mut cyber_gear_can_t, 21);
+        self.init_frame(
+            &mut cyber_gear_frame as *mut cyber_gear_can_t,
+            cyber_gear_can_communication_type_t_COMMUNICATION_LOGGING,
+        );
 
         unsafe {
-            cyber_gear_set_can_id_int_value(
+            cyber_gear_set_can_id_communication_type_variant(
                 &mut cyber_gear_frame as *mut cyber_gear_can_t,
-                16,
-                8,
                 0x03,
             );
         }
@@ -929,9 +984,10 @@ where
     }
 
     pub fn set_logging_pid(&self, frame: &mut cyber_gear_can_t, pid: u16, pos: usize) {
+        let [lo, hi] = pid.to_le_bytes();
         unsafe {
-            frame.can_data.bytes[pos * 2 + 1] = (pid >> 8) as u8;
-            frame.can_data.bytes[pos * 2] = pid as u8;
+            frame.can_data.bytes[pos * 2 + 1] = hi;
+            frame.can_data.bytes[pos * 2] = lo;
         }
     }
 
@@ -942,7 +998,6 @@ where
             let mut lock = self.can.lock().await;
 
             lock.as_mut().unwrap().transmit(&hal_frame).map_err(|e| {
-                error!("failed sending CAN frame {:?}", defmt::Debug2Format(&e));
                 self.can_send_error = now();
                 self.last_cmd_sent = now();
                 GearError::CanWriteError(e)
@@ -954,8 +1009,11 @@ where
             Id::Standard(standard_id) => standard_id.as_raw() as u32,
             Id::Extended(extended_id) => extended_id.as_raw(),
         };
+        #[cfg(feature = "debug-log")]
+        info!("> {:x} : {:x}", id_raw, hal_frame.data());
 
         if log {
+            #[cfg(not(feature = "debug-log"))]
             info!("> {:x} : {:x}", id_raw, hal_frame.data());
         }
 
@@ -988,13 +1046,6 @@ where
         }
 
         false
-    }
-}
-
-pub async fn test_logging_and_time() {
-    loop {
-        info!("logging is working yay");
-        delay_ms(2000).await;
     }
 }
 
@@ -1104,7 +1155,7 @@ pub enum MotorMode {
     Current = 3,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Default, Format)]
 #[allow(dead_code)]
 #[repr(u8)]
 pub enum MotorState {
