@@ -36,24 +36,43 @@ use embassy_sync::mutex::Mutex;
 use embassy_time::{Instant, Timer};
 use embedded_can::nb::Can;
 use embedded_can::{Frame, Id};
-use nb::Error;
+use nb::{Error, block};
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 #[allow(dead_code)]
 pub struct LogParameters {
     pub last_rcv: u32,
     pub param_count: u16,
     pub freq: u16, // Hz
     pub param_slot_pid: [u16; 8],
-    pub param_slot_value: [f32; 8],
+    pub param_slot_value_ptr: [*mut f32; 8],
     pub expected_frame_number: u8,
-    pub data_buffer: [u8; 4], // Temporary buffer of half values, 4 bytes long
+    pub data_buffer: [u8; 4], // Temporary buffer of half-values, 4 bytes long
 
     pub torque_fdb: f32, // CONFIG_R_TORQUE_FDB
     pub dtc_u: f32,      // CONFIG_R_DTC_U - for arming/enable checking
     pub v_bus: f32,      // CONFIG_R_VBUS_V - input voltage monitoring
     pub vel: f32,        // CONFIG_R_MECH_VEL
     pub pos: f32,        // CONFIG_R_MECH_POS
+}
+
+impl Default for LogParameters {
+    fn default() -> Self {
+        Self {
+            last_rcv: 0,
+            param_count: 0,
+            freq: 0,
+            param_slot_pid: [0; 8],
+            param_slot_value_ptr: [0 as *mut f32; 8],
+            expected_frame_number: 0,
+            data_buffer: [0; 4],
+            torque_fdb: 0.0,
+            dtc_u: 0.0,
+            v_bus: 0.0,
+            vel: 0.0,
+            pos: 0.0,
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -228,7 +247,7 @@ where
     }
 
     pub fn reverse_direction(&mut self) {
-        self.direction = -self.direction;
+        self.direction = -1 * self.direction;
     }
 
     pub async fn enable(&mut self) -> Result<(), GearError<C>> {
@@ -793,8 +812,10 @@ where
                             let mut float_slice = [0u8; 4];
                             float_slice
                                 .copy_from_slice(unsafe { &cybergear_frame.can_data.bytes[2..6] });
-                            self.log_parameters.param_slot_value[0] =
-                                f32::from_le_bytes(float_slice);
+                            unsafe {
+                                *self.log_parameters.param_slot_value_ptr[0] =
+                                    f32::from_le_bytes(float_slice);
+                            }
                             self.log_parameters.data_buffer[..2]
                                 .copy_from_slice(unsafe { &cybergear_frame.can_data.bytes[6..] });
 
@@ -805,8 +826,11 @@ where
                         _ if frame_number > 0 => {
                             self.log_parameters.data_buffer[2..]
                                 .copy_from_slice(unsafe { &cybergear_frame.can_data.bytes[0..2] });
-                            self.log_parameters.param_slot_value[(frame_number as usize * 2) - 1] =
-                                f32::from_le_bytes(self.log_parameters.data_buffer);
+                            unsafe {
+                                *self.log_parameters.param_slot_value_ptr
+                                    [(frame_number as usize * 2) - 1] =
+                                    f32::from_le_bytes(self.log_parameters.data_buffer);
+                            }
 
                             if self.log_parameters.param_count
                                 > (frame_number as usize * 2 - 1) as u16
@@ -815,8 +839,11 @@ where
                                 float_slice.copy_from_slice(unsafe {
                                     &cybergear_frame.can_data.bytes[2..6]
                                 });
-                                self.log_parameters.param_slot_value[frame_number as usize * 2] =
-                                    f32::from_le_bytes(float_slice);
+                                unsafe {
+                                    *self.log_parameters.param_slot_value_ptr
+                                        [frame_number as usize * 2] =
+                                        f32::from_le_bytes(float_slice);
+                                }
 
                                 self.log_parameters.data_buffer[..2].copy_from_slice(unsafe {
                                     &cybergear_frame.can_data.bytes[6..8]
@@ -842,15 +869,6 @@ where
                 self.uuid = unsafe { cybergear_frame.can_data.value };
                 return true;
             }
-            _ if comm_type
-                == cyber_gear_can_communication_type_t_COMMUNICATION_READ_SINGLE_PARAM =>
-            {
-                // TODO: Not sure about implementation
-                let _param = unsafe {
-                    cybergear_frame.can_data.bytes[0] as u16
-                        | ((cybergear_frame.can_data.bytes[1] as u16) << 8)
-                };
-            }
             _ => info!(
                 "> {:x} : {:x}",
                 unsafe { cybergear_frame.can_id.value },
@@ -875,11 +893,12 @@ where
         self.log_parameters.param_count = 3;
         self.log_parameters.param_slot_pid[0] =
             cyber_gear_config_index_t_CONFIG_R_TORQUE_FDB as u16;
-        self.log_parameters.param_slot_value[0] = self.log_parameters.torque_fdb;
+        self.log_parameters.param_slot_value_ptr[0] =
+            &mut self.log_parameters.torque_fdb as *mut f32;
         self.log_parameters.param_slot_pid[1] = cyber_gear_config_index_t_CONFIG_R_MECH_VEL as u16;
-        self.log_parameters.param_slot_value[1] = self.log_parameters.vel;
+        self.log_parameters.param_slot_value_ptr[1] = &mut self.log_parameters.vel as *mut f32;
         self.log_parameters.param_slot_pid[2] = cyber_gear_config_index_t_CONFIG_R_MECH_POS as u16;
-        self.log_parameters.param_slot_value[2] = self.log_parameters.pos;
+        self.log_parameters.param_slot_value_ptr[2] = &mut self.log_parameters.pos as *mut f32;
 
         self.init_frame(
             &mut frame1 as *mut cyber_gear_can_t,
@@ -922,7 +941,7 @@ where
             }
 
             if self.send_frame(frame2, true).await.is_ok() {
-                delay_ms(10u64).await;
+                delay_ms(10).await;
                 let mut frame3 = cyber_gear_can_t::new();
 
                 self.init_frame(
@@ -995,12 +1014,16 @@ where
         let cybergear_frame = CyberGearFrame::from(frame);
         let hal_frame = self.adapter.to_frame(&cybergear_frame);
         {
-            let mut lock = self.can.lock().await;
+            let mut guard = self.can.lock().await;
+            let driver = guard.as_mut().unwrap();
 
-            lock.as_mut().unwrap().transmit(&hal_frame).map_err(|e| {
+            let tx_res: Result<_, C::Error> = block!(driver.transmit(&hal_frame));
+
+            tx_res.map_err(|e| {
+                // record when it failed
                 self.can_send_error = now();
                 self.last_cmd_sent = now();
-                GearError::CanWriteError(e)
+                GearError::CanWriteError(Error::from(e))
             })?;
         }
         self.last_cmd_sent = now();
@@ -1009,12 +1032,12 @@ where
             Id::Standard(standard_id) => standard_id.as_raw() as u32,
             Id::Extended(extended_id) => extended_id.as_raw(),
         };
-        #[cfg(feature = "debug-log")]
-        info!("> {:x} : {:x}", id_raw, hal_frame.data());
 
+        #[cfg(feature = "debug-log")]
+        info!("out message >> {=u32:08x} : {:x}", id_raw, hal_frame.data());
         if log {
             #[cfg(not(feature = "debug-log"))]
-            info!("> {:x} : {:x}", id_raw, hal_frame.data());
+            info!("out message >> {=u32:08x} : {:x}", id_raw, hal_frame.data());
         }
 
         Ok(())
