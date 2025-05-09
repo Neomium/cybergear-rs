@@ -17,13 +17,21 @@ fn main() {
     build.include(lib_path);
 
     let target_mcu = if target.contains("esp32s3") {
-        build.compiler("xtensa-esp32s3-elf-gcc");
-        build.archiver("xtensa-esp32s3-elf-ar");
+        let cc = std::env::var("CC_XTENSA_ESP32S3_NONE_ELF")
+            .unwrap_or_else(|_| "xtensa-esp32s3-elf-gcc".into());
+        let ar = std::env::var("AR_XTENSA_ESP32S3_NONE_ELF")
+            .unwrap_or_else(|_| "xtensa-esp32s3-elf-ar".into());
+        build.compiler(cc.as_str());
+        build.archiver(ar.as_str());
         println!("cargo:warning=building for esp32s3");
         target.as_str()
     } else if target.contains("esp32") {
-        build.compiler("xtensa-esp32-elf-gcc");
-        build.archiver("xtensa-esp32-elf-ar");
+        let cc = std::env::var("CC_XTENSA_ESP32_NONE_ELF")
+            .unwrap_or_else(|_| "xtensa-esp32-elf-gcc".into());
+        let ar = std::env::var("AR_XTENSA_ESP32_NONE_ELF")
+            .unwrap_or_else(|_| "xtensa-esp32-elf-ar".into());
+        build.compiler(cc.as_str());
+        build.archiver(ar.as_str());
         println!("cargo:warning=building for esp32");
         target.as_str()
     } else {
@@ -43,19 +51,13 @@ fn main() {
     let target_lib = format!("libCyberGearProtocol_{}.a", target_mcu);
 
     if build_dir.join(Path::new(target_lib.as_str())).exists() {
-        println!(
-            "cargo:warning={} already exists, skipping build",
-            target_lib
-        );
+        println!("cargo:warning={target_lib} already exists, skipping build");
     } else {
-        println!(
-            "cargo:warning=libCyberGearProtocol_{}.a does not exist, building",
-            target_mcu
-        );
+        println!("cargo:warning=libCyberGearProtocol_{target_mcu}.a does not exist, building",);
     }
 
     let lib_name = {
-        let out = format!("CyberGearProtocol_{}", target_mcu);
+        let out = format!("CyberGearProtocol_{target_mcu}");
         out
     };
 
