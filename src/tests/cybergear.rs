@@ -81,12 +81,11 @@ async fn test_process_inframe() {
 
     let mut cyber_gear = setup_cybergear(0x03).await;
 
-    let res = cyber_gear.process_inframe(&mock_frame);
+    let res = cyber_gear.process_inframe(&mock_frame).await;
     let status = cyber_gear.get_status();
 
-    // host id and motor id positions swapped in cyber_gear_protocol.c
-    assert_eq!(status.motor_can_id, 0x03);
-    assert_eq!(status.host_can_id, 0x7D);
+    assert_eq!(status.motor_can_id, 0x7D);
+    assert_eq!(status.host_can_id, 0x03);
     assert_eq!(status.mode_type, 0x2);
 
     let speed_val = mock_frame.data[3] as u16 | (mock_frame.data[2] as u16) << 8;

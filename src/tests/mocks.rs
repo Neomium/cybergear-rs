@@ -58,15 +58,15 @@ impl Frame for MockFrame {
 pub(crate) struct MockAdapter;
 
 impl CanFrameAdapter<MockFrame> for MockAdapter {
-    fn from_frame(&self, frame: &MockFrame) -> CyberGearFrame {
-        CyberGearFrame {
+    fn to_frame(&self, frame: &CyberGearFrame) -> MockFrame {
+        MockFrame {
             id: frame.id,
             data: frame.data,
         }
     }
 
-    fn to_frame(&self, frame: &CyberGearFrame) -> MockFrame {
-        MockFrame {
+    fn from_frame(&self, frame: &MockFrame) -> CyberGearFrame {
+        CyberGearFrame {
             id: frame.id,
             data: frame.data,
         }
@@ -83,6 +83,7 @@ impl embedded_can::Error for MockCanError {
 }
 
 mock! {
+    #[derive(Debug)]
     pub Can {}
 
     impl Can for Can {
