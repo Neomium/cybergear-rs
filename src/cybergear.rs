@@ -117,7 +117,7 @@ where
 
 #[allow(dead_code)]
 pub struct CyberGear<C: Can + 'static, A: CanFrameAdapter<C::Frame>> {
-    can: &'static Mutex<CriticalSectionRawMutex, Option<C>>,
+    pub can: &'static Mutex<CriticalSectionRawMutex, Option<C>>,
     adapter: A,
     /// Host CAN ID
     host_id: u8,
