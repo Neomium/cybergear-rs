@@ -173,6 +173,9 @@ pub trait ServoMotor {
 
     /// Runs homing sequence for motor
     async fn execute(&mut self);
+
+    /// Returns instant of last homing command, if > 0 homing is in progress
+    fn homing_instant(&self) -> u32;
 }
 
 /// Xiaomi Cybergear servo motor
@@ -456,6 +459,10 @@ where
             self.homing.is_homed = false;
             self.can_send_error = 0;
         }
+    }
+
+    fn homing_instant(&self) -> u32 {
+        self.homing.homing_ms
     }
 }
 
