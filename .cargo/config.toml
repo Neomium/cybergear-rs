@@ -1,6 +1,5 @@
 [build]
 target = "xtensa-esp32s3-none-elf"
-CC_XTENSA_ESP32S3_NONE_ELF = "xtensa-esp32s3-elf-gcc"
 
 # Apply the normal Rust toolchain for tests
 [alias]
