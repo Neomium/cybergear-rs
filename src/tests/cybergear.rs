@@ -3,7 +3,7 @@ use crate::bindings::{
     cyber_gear_can_t__bindgen_ty_1, cyber_gear_can_t__bindgen_ty_2,
     cyber_gear_get_can_id_int_value,
 };
-use crate::cybergear::CyberGear;
+use crate::cybergear::{CyberGear, ServoMotor};
 use crate::tests::mocks::{MockAdapter, MockCan, MockFrame};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
@@ -35,6 +35,7 @@ async fn test_init_frame() {
     let raw_eid = unsafe { frame.can_id.value };
 
     println!("raw_eid: {:x}", raw_eid);
+    println!("data: {:?}", unsafe { frame.can_data.bytes });
 
     assert_eq!(raw_eid & 0xFF, 0x3);
     assert_eq!((raw_eid >> 8) & 0xFF, 0x7D);

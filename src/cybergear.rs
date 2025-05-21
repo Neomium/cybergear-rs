@@ -1,3 +1,5 @@
+#![allow(async_fn_in_trait)]
+
 use crate::bindings::{
     cyber_gear_build_motion_control_frame, cyber_gear_build_parameter_write_frame_with_float_value,
     cyber_gear_build_parameter_write_frame_with_int_value, cyber_gear_can_communication_type_t,
@@ -41,19 +43,19 @@ use nb::{Error, block};
 #[derive(Debug)]
 #[allow(dead_code)]
 pub struct LogParameters {
-    pub last_rcv: u32,
-    pub param_count: u16,
-    pub freq: u16, // Hz
-    pub param_slot_pid: [u16; 8],
-    pub param_slot_value_ptr: [*mut f32; 8],
-    pub expected_frame_number: u8,
-    pub data_buffer: [u8; 4], // Temporary buffer of half-values, 4 bytes long
+    last_rcv: u32,
+    param_count: u16,
+    freq: u16, // Hz
+    param_slot_pid: [u16; 8],
+    param_slot_value_ptr: [*mut f32; 8],
+    expected_frame_number: u8,
+    data_buffer: [u8; 4], // Temporary buffer of half-values, 4 bytes long
 
-    pub torque_fdb: f32, // CONFIG_R_TORQUE_FDB
-    pub dtc_u: f32,      // CONFIG_R_DTC_U - for arming/enable checking
-    pub v_bus: f32,      // CONFIG_R_VBUS_V - input voltage monitoring
-    pub vel: f32,        // CONFIG_R_MECH_VEL
-    pub pos: f32,        // CONFIG_R_MECH_POS
+    torque_fdb: f32, // CONFIG_R_TORQUE_FDB
+    dtc_u: f32,      // CONFIG_R_DTC_U - for arming/enable checking
+    v_bus: f32,      // CONFIG_R_VBUS_V - input voltage monitoring
+    vel: f32,        // CONFIG_R_MECH_VEL
+    pos: f32,        // CONFIG_R_MECH_POS
 }
 
 impl Default for LogParameters {
@@ -78,7 +80,7 @@ impl Default for LogParameters {
 #[derive(Debug, Default)]
 #[allow(dead_code)]
 pub struct Homing {
-    pub homing: u32,
+    pub homing_ms: u32,
     pub timeout: u32,
     pub current: f32,
     pub hstate_change: u32,
@@ -115,105 +117,140 @@ where
     }
 }
 
-#[allow(dead_code)]
-pub struct CyberGear<C: Can + 'static, A: CanFrameAdapter<C::Frame>> {
-    pub can: &'static Mutex<CriticalSectionRawMutex, Option<C>>,
-    adapter: A,
-    /// Host CAN ID
-    host_id: u8,
-    /// Motor CAN ID
-    motor_id: u8,
-    uuid: u64,
-    pub homing: Homing,
-    pub log_parameters: LogParameters,
+pub trait ServoMotor {
+    type Error;
+    type Frame: Frame;
+    async fn init(&mut self) -> Result<(), Self::Error>;
 
-    pub target_position: f32,
+    fn set_host_id(&mut self, id: u8);
 
-    default_params: Parameters,
-    current_params: Parameters,
+    fn set_home_position(&mut self, position: f32);
 
-    pub last_cmd_sent: u32,
-    pub last_response: u32,
-    pub last_status_frame_req: u32,
-    pub last_status_frame_rec: u32,
+    fn set_homed(&mut self, homed: bool);
 
-    pub enabled: bool,
-    logging_active: bool,
+    fn reverse_direction(&mut self);
 
-    can_send_error: u32,
-    pub fault_time: u32,
+    async fn set_parameters(
+        &mut self,
+        current_limit: f32,
+        speed_limit: f32,
+        torque_limit: f32,
+        ki: f32,
+        kp: f32,
+        kd: f32,
+        filter_gain: f32,
+    ) -> Result<(), Self::Error>;
 
-    pub wait_for_response: u32,
+    /// Set current limit for servo motor
+    async fn set_current_limit(&mut self, limit: f32) -> Result<(), Self::Error>;
 
-    pub current_mode: MotorMode,       // Custom type
-    status: cyber_gear_motor_status_t, // Custom type
-    pub direction: i32,
+    /// Run motor to position
+    async fn run_position_safe(&mut self, position: f32) -> Result<(), Self::Error>;
 
-    temperature: f32,
-    voltage: f32,
-    current_position: f32,
+    /// Process incoming CAN frame
+    async fn process_inframe(&mut self, frame: &Self::Frame) -> bool;
+
+    /// Set target position for motor
+    fn set_target_position(&mut self, position: f32);
+
+    /// Returns true if motor is homed
+    fn is_homed(&self) -> bool;
+
+    /// Home motor
+    fn home(&mut self, timeout: u32, current: f32);
+
+    /// Disable motor
+    async fn disable(&mut self) -> Result<(), Self::Error>;
+
+    /// Enable motor
+    async fn enable(&mut self) -> Result<(), Self::Error>;
+
+    /// Get logged torque value for motor
+    fn get_torque_fdb(&self) -> f32;
+
+    /// Get logged motor position
+    fn get_position(&self) -> f32;
+
+    /// Runs homing sequence for motor
+    async fn execute(&mut self);
 }
 
-impl<C, A> CyberGear<C, A>
+/// Xiaomi Cybergear servo motor
+#[allow(dead_code)]
+pub struct CyberGear<C: Can + 'static, A: CanFrameAdapter<C::Frame>> {
+    /// CAN Bus
+    can: &'static Mutex<CriticalSectionRawMutex, Option<C>>,
+
+    /// CAN frame adapter to convert types from and to CyberGearFrame
+    adapter: A,
+
+    /// Host CAN ID
+    host_id: u8,
+
+    /// Motor CAN ID
+    motor_id: u8,
+
+    /// Servo uuid
+    uuid: u64,
+
+    /// Homing parameters
+    homing: Homing,
+
+    /// Logging parameters
+    log_parameters: LogParameters,
+
+    /// Servo target position
+    target_position: f32,
+
+    /// Default servo parameters
+    default_params: Parameters,
+
+    /// Current servo parameters
+    current_params: Parameters,
+
+    /// Time instant in ms of last command sent
+    last_cmd_sent: u32,
+
+    /// Time instant in ms of last response received
+    last_response: u32,
+
+    /// Time instant in ms of last status frame request sent
+    last_status_frame_req: u32,
+
+    /// Time instant in ms of last status frame received
+    last_status_frame_rec: u32,
+
+    /// If true, servo is enabled
+    enabled: bool,
+
+    /// If true, logging is activated
+    logging_active: bool,
+
+    /// Time instant in ms of last CAN send error
+    can_send_error: u32,
+
+    /// Time instant in of ms of last fault
+    fault_time: u32,
+
+    /// Cybergear operating mode
+    current_mode: MotorMode,
+
+    /// Cybergear motor status
+    status: cyber_gear_motor_status_t,
+
+    /// Direction of rotation
+    direction: i32,
+}
+
+impl<C, A> ServoMotor for CyberGear<C, A>
 where
     C: Can + 'static,
     A: CanFrameAdapter<C::Frame>,
     <C as Can>::Error: Debug,
 {
-    pub fn new(
-        can_id: u8,
-        can_dev: &'static Mutex<CriticalSectionRawMutex, Option<C>>,
-        adapter: A,
-    ) -> Self {
-        Self {
-            motor_id: can_id,
-            adapter,
-            host_id: 0x7D,
-            direction: 1,
-            can: can_dev,
-            current_mode: Default::default(),
-            logging_active: false,
-            wait_for_response: 0,
-            default_params: Parameters::default(),
-            current_position: 0.0,
-            target_position: 0.0,
-            last_response: 0,
-            last_cmd_sent: 0,
-            last_status_frame_rec: 0,
-            fault_time: 0,
-            enabled: false,
-            voltage: 0.0,
-            last_status_frame_req: 0,
-            uuid: 0,
-            temperature: 0.0,
-            status: cyber_gear_motor_status_t::default(),
-            can_send_error: 0,
-            current_params: Parameters::default(),
-            homing: Homing {
-                current: 0.6,
-                ..Default::default()
-            },
-            log_parameters: LogParameters {
-                freq: 50,
-                ..Default::default()
-            },
-        }
-    }
-
-    pub(crate) fn init_frame(
-        &self,
-        frame: *mut cyber_gear_can_t,
-        can_type: cyber_gear_can_communication_type_t,
-    ) {
-        unsafe {
-            cyber_gear_can_init(frame);
-            cyber_gear_set_can_id_host_can_id(frame, self.host_id as i32);
-            cyber_gear_set_can_id_target_can_id(frame, self.motor_id as i32);
-            cyber_gear_set_can_id_communication_type(frame, can_type);
-        }
-    }
-
-    pub async fn init(&mut self) -> Result<(), GearError<C>> {
+    type Error = GearError<C>;
+    type Frame = C::Frame;
+    async fn init(&mut self) -> Result<(), Self::Error> {
         let mut frame = cyber_gear_can_t::new();
         self.init_frame(
             &mut frame as *mut cyber_gear_can_t,
@@ -222,119 +259,56 @@ where
         self.send_frame(frame, true).await
     }
 
-    pub fn set_host_id(&mut self, id: u8) {
+    fn set_host_id(&mut self, id: u8) {
         self.host_id = id;
     }
 
-    pub async fn set_mode(&mut self, mode: MotorMode) -> Result<(), GearError<C>> {
-        let mut frame = cyber_gear_can_t::new();
-        self.init_frame(
-            &mut frame as *mut cyber_gear_can_t,
-            cyber_gear_can_communication_type_t_COMMUNICATION_WRITE_SINGLE_PARAM,
-        );
-
-        unsafe {
-            cyber_gear_build_parameter_write_frame_with_int_value(
-                &mut frame as *mut cyber_gear_can_t,
-                cyber_gear_read_write_parameter_index_t_PARAMETER_RUN_MODE,
-                mode as i32,
-            );
-        }
-        self.send_frame(frame, false).await?;
-        self.current_mode = mode;
-        info!("Changed mode to: {:?}", mode);
-        Ok(())
+    fn set_home_position(&mut self, position: f32) {
+        self.homing.position = position;
     }
 
-    pub fn reverse_direction(&mut self) {
+    fn set_homed(&mut self, homed: bool) {
+        self.homing.is_homed = homed;
+    }
+
+    fn reverse_direction(&mut self) {
         self.direction = -1 * self.direction;
     }
 
-    pub async fn enable(&mut self) -> Result<(), GearError<C>> {
-        let mut frame = cyber_gear_can_t::new();
-        self.init_frame(
-            &mut frame as *mut cyber_gear_can_t,
-            cyber_gear_can_communication_type_t_COMMUNICATION_ENABLE_DEVICE,
-        );
-        self.send_frame(frame, false).await?;
-        self.enabled = true;
+    async fn set_parameters(
+        &mut self,
+        current_limit: f32,
+        speed_limit: f32,
+        torque_limit: f32,
+        ki: f32,
+        kp: f32,
+        kd: f32,
+        filter_gain: f32,
+    ) -> Result<(), Self::Error> {
+        self.default_params = Parameters {
+            current_limit,
+            speed_limit,
+            torque_limit,
+            ki,
+            kp,
+            kd,
+            filter_gain,
+            ..Default::default()
+        };
 
-        if !self.start_logging().await {
-            error!("Failed to start logging");
-            return Err(GearError::StartLoggingError);
-        }
-
+        self.set_current_limit(current_limit).await?;
+        self.set_speed_limit(speed_limit).await?;
+        self.set_torque_limit(torque_limit).await?;
+        delay_ms(5).await;
+        self.set_ki(ki).await?;
+        self.set_kp(kp).await?;
+        self.set_kd(kd)?;
+        self.set_filter_gain(filter_gain).await?;
+        delay_ms(50).await;
         Ok(())
     }
 
-    pub async fn check_enabled(&mut self) -> Result<(), GearError<C>> {
-        let mut frame = cyber_gear_can_t::new();
-        self.init_frame(
-            &mut frame as *mut cyber_gear_can_t,
-            cyber_gear_can_communication_type_t_COMMUNICATION_READ_SINGLE_PARAM,
-        );
-        frame.can_data.value = cyber_gear_config_index_t_CONFIG_R_TORQUE_FDB as u64;
-        self.send_frame(frame, false).await?;
-        self.enabled = true;
-        Ok(())
-    }
-
-    pub async fn clear_fault(&mut self) -> Result<(), GearError<C>> {
-        let mut frame = cyber_gear_can_t::new();
-        self.init_frame(
-            &mut frame as *mut cyber_gear_can_t,
-            cyber_gear_can_communication_type_t_COMMUNICATION_DISABLE_DEVICE,
-        );
-        unsafe {
-            frame.can_data.bytes[0] = 0x1;
-        }
-        self.send_frame(frame, false).await?;
-        if self.enabled {
-            self.enable().await?;
-        }
-        info!("Fault cleared");
-        Ok(())
-    }
-
-    pub async fn request_status_report(&mut self) -> bool {
-        if now() - self.last_status_frame_req < 100 {
-            return false;
-        }
-
-        let mut frame = cyber_gear_can_t::new();
-
-        if self.enabled {
-            self.init_frame(
-                &mut frame as *mut cyber_gear_can_t,
-                cyber_gear_can_communication_type_t_COMMUNICATION_ENABLE_DEVICE,
-            );
-        } else {
-            self.init_frame(
-                &mut frame as *mut cyber_gear_can_t,
-                cyber_gear_can_communication_type_t_COMMUNICATION_DISABLE_DEVICE,
-            );
-        }
-
-        if self.send_frame(frame, false).await.is_ok() {
-            self.last_status_frame_req = now();
-            return true;
-        }
-        false
-    }
-
-    pub async fn disable(&mut self) -> Result<(), GearError<C>> {
-        let mut frame = cyber_gear_can_t::new();
-        self.init_frame(
-            &mut frame as *mut cyber_gear_can_t,
-            cyber_gear_can_communication_type_t_COMMUNICATION_DISABLE_DEVICE,
-        );
-        self.send_frame(frame, false).await?;
-        self.enabled = false;
-        self.stop_logging().await;
-        Ok(())
-    }
-
-    pub async fn set_current_limit(&mut self, limit: f32) -> Result<(), GearError<C>> {
+    async fn set_current_limit(&mut self, limit: f32) -> Result<(), Self::Error> {
         let mut frame = cyber_gear_can_t::new();
         self.init_frame(
             &mut frame as *mut cyber_gear_can_t,
@@ -350,261 +324,49 @@ where
         self.current_params.current_limit = limit;
         self.send_frame(frame, false).await
     }
-
-    pub async fn set_speed_limit(&mut self, limit: f32) -> Result<(), GearError<C>> {
-        let mut frame = cyber_gear_can_t::new();
-        self.init_frame(
-            &mut frame as *mut cyber_gear_can_t,
-            cyber_gear_can_communication_type_t_COMMUNICATION_WRITE_SINGLE_PARAM,
-        );
-        unsafe {
-            cyber_gear_build_parameter_write_frame_with_float_value(
-                &mut frame as *mut cyber_gear_can_t,
-                cyber_gear_read_write_parameter_index_t_PARAMETER_LIMIT_SPD,
-                limit,
-            );
-        }
-        self.current_params.speed_limit = limit;
-        self.send_frame(frame, false).await
-    }
-
-    pub async fn set_torque_limit(&mut self, limit: f32) -> Result<(), GearError<C>> {
-        let mut frame = cyber_gear_can_t::new();
-        self.init_frame(
-            &mut frame as *mut cyber_gear_can_t,
-            cyber_gear_can_communication_type_t_COMMUNICATION_WRITE_SINGLE_PARAM,
-        );
-        unsafe {
-            cyber_gear_build_parameter_write_frame_with_float_value(
-                &mut frame as *mut cyber_gear_can_t,
-                cyber_gear_read_write_parameter_index_t_PARAMETER_LIMIT_TORQUE,
-                limit,
-            );
-        }
-        self.current_params.torque_limit = limit;
-        self.send_frame(frame, false).await
-    }
-
-    pub async fn set_ki(&mut self, ki: f32) -> Result<(), GearError<C>> {
-        let mut frame = cyber_gear_can_t::new();
-        self.init_frame(
-            &mut frame as *mut cyber_gear_can_t,
-            cyber_gear_can_communication_type_t_COMMUNICATION_WRITE_SINGLE_PARAM,
-        );
-
-        unsafe {
-            cyber_gear_build_parameter_write_frame_with_float_value(
-                &mut frame as *mut cyber_gear_can_t,
-                cyber_gear_read_write_parameter_index_t_PARAMETER_CUR_KI,
-                ki,
-            );
-        }
-
-        self.current_params.ki = ki;
-        self.send_frame(frame, false).await
-    }
-
-    pub async fn set_kp(&mut self, kp: f32) -> Result<(), GearError<C>> {
-        let mut frame = cyber_gear_can_t::new();
-        self.init_frame(
-            &mut frame as *mut cyber_gear_can_t,
-            cyber_gear_can_communication_type_t_COMMUNICATION_WRITE_SINGLE_PARAM,
-        );
-
-        unsafe {
-            cyber_gear_build_parameter_write_frame_with_float_value(
-                &mut frame as *mut cyber_gear_can_t,
-                cyber_gear_read_write_parameter_index_t_PARAMETER_CUR_KP,
-                kp,
-            );
-        }
-
-        self.current_params.kp = kp;
-        self.send_frame(frame, false).await
-    }
-
-    // No kd value for cyber gear?
-    pub fn set_kd(&mut self, kd: f32) -> Result<(), GearError<C>> {
-        //  let mut frame = cyber_gear_can_t::new();
-        //  self.init_frame(
-        //      &mut frame as *mut cyber_gear_can_t,
-        //      cyber_gear_can_communication_type_t_COMMUNICATION_WRITE_SINGLE_PARAM,
-        //  );
-        //  unsafe {
-        //      cyber_gear_build_parameter_write_frame_with_float_value(
-        //          &mut frame as *mut cyber_gear_can_t,
-        //          cyber_gear_read_write_parameter_index_t_PARAMETER_CUR_KD,
-        //          kd,
-        //      );
-        //  }
-        //  self.send_frame(frame,false)?;
-        self.current_params.kd = kd;
-        Ok(())
-    }
-
-    pub async fn set_filter_gain(&mut self, gain: f32) -> Result<(), GearError<C>> {
-        let mut frame = cyber_gear_can_t::new();
-        self.init_frame(
-            &mut frame as *mut cyber_gear_can_t,
-            cyber_gear_can_communication_type_t_COMMUNICATION_WRITE_SINGLE_PARAM,
-        );
-
-        unsafe {
-            cyber_gear_build_parameter_write_frame_with_float_value(
-                &mut frame as *mut cyber_gear_can_t,
-                cyber_gear_read_write_parameter_index_t_PARAMETER_CUR_FILT_GAIN,
-                gain,
-            );
-        }
-
-        self.current_params.filter_gain = gain;
-        self.send_frame(frame, false).await
-    }
-
-    pub async fn run_speed(&mut self, speed: f32) -> Result<(), GearError<C>> {
-        if self.current_mode != MotorMode::Speed {
-            self.set_mode(MotorMode::Speed).await?;
-        }
-        let mut frame = cyber_gear_can_t::new();
-        self.init_frame(
-            &mut frame as *mut cyber_gear_can_t,
-            cyber_gear_can_communication_type_t_COMMUNICATION_MOTION_CONTROL_COMMAND,
-        );
-        unsafe {
-            cyber_gear_build_parameter_write_frame_with_float_value(
-                &mut frame as *mut cyber_gear_can_t,
-                cyber_gear_read_write_parameter_index_t_PARAMETER_SPD_REF,
-                speed * self.direction as f32,
-            );
-        }
-        self.send_frame(frame, false).await
-    }
-
-    pub async fn run_current(&mut self, current: f32) -> Result<(), GearError<C>> {
-        if self.current_mode != MotorMode::Current {
-            self.set_mode(MotorMode::Current).await?;
-        }
-
-        let mut frame = cyber_gear_can_t::new();
-        self.init_frame(
-            &mut frame as *mut cyber_gear_can_t,
-            cyber_gear_can_communication_type_t_COMMUNICATION_MOTION_CONTROL_COMMAND,
-        );
-
-        unsafe {
-            cyber_gear_build_parameter_write_frame_with_float_value(
-                &mut frame as *mut cyber_gear_can_t,
-                cyber_gear_read_write_parameter_index_t_PARAMETER_IQ_REF,
-                current * self.direction as f32,
-            );
-        }
-
-        self.send_frame(frame, false).await
-    }
-
-    pub async fn run_position_safe(&mut self, position: f32) -> Result<(), GearError<C>> {
-        if self.is_ready().await && self.homing.homing == 0 {
+    async fn run_position_safe(&mut self, position: f32) -> Result<(), Self::Error> {
+        if self.is_ready().await && self.homing.homing_ms == 0 {
             return self.run_position(position).await;
         }
 
         Ok(())
     }
 
-    pub async fn run_position(&mut self, position: f32) -> Result<(), GearError<C>> {
-        if self.current_mode != MotorMode::Position {
-            self.set_mode(MotorMode::Position).await?;
-        }
-
-        let mut frame = cyber_gear_can_t::new();
-
-        self.init_frame(
-            &mut frame as *mut cyber_gear_can_t,
-            cyber_gear_can_communication_type_t_COMMUNICATION_MOTION_CONTROL_COMMAND,
-        );
-
-        unsafe {
-            cyber_gear_build_parameter_write_frame_with_float_value(
-                &mut frame as *mut cyber_gear_can_t,
-                cyber_gear_read_write_parameter_index_t_PARAMETER_LOC_REF,
-                position * self.direction as f32,
-            );
-        }
-
-        self.send_frame(frame, false).await
+    async fn process_inframe(&mut self, frame: &Self::Frame) -> bool {
+        self.process_frame(frame).await
     }
 
-    #[allow(clippy::wrong_self_convention)]
-    pub async fn is_ready(&mut self) -> bool {
-        if now() - self.last_status_frame_rec < 5000 || now() - self.log_parameters.last_rcv < 100 {
-            if self.status_error() {
-                if self.fault_time == 0 {
-                    self.fault_time = now();
-                }
-
-                info!(
-                    "Motor Error:\r\nOC:{}\r\nUV:{}\r\nOT:{}\r\nCAL:{}\r\nHALL:{}\r\nMAG:{}",
-                    self.status.has_over_current,
-                    self.status.has_undervoltage,
-                    self.status.has_over_temperature,
-                    self.status.has_calibration_error,
-                    self.status.has_hall_encode_error,
-                    self.status.has_magnetic_encoding_error,
-                );
-
-                delay_ms(5).await;
-
-                if let Err(_e) = self.clear_fault().await {
-                    error!("CyberGear clear_fault error");
-                }
-
-                return false;
-            }
-
-            if self.fault_time != 0 {
-                self.fault_time = 0;
-            }
-
-            return true;
-        }
-
-        self.request_status_report().await
+    fn set_target_position(&mut self, position: f32) {
+        self.target_position = position;
     }
 
-    pub async fn run_op(
-        &mut self,
-        speed: f32,
-        position: f32,
-        torque: f32,
-        kd: f32,
-        kp: f32,
-    ) -> Result<(), GearError<C>> {
-        let mut frame = cyber_gear_can_t::new();
-
-        self.init_frame(
-            &mut frame as *mut cyber_gear_can_t,
-            cyber_gear_can_communication_type_t_COMMUNICATION_MOTION_CONTROL_COMMAND,
-        );
-
-        let control_params = cyber_gear_motion_control_t {
-            motor_can_id: self.motor_id,
-            target_speed: speed,
-            target_location: position * self.direction as f32,
-            kd,
-            kp,
-            torque,
-        };
-
-        unsafe {
-            cyber_gear_build_motion_control_frame(
-                &mut frame as *mut cyber_gear_can_t,
-                control_params,
-            );
-        }
-
-        self.send_frame(frame, false).await
+    fn is_homed(&self) -> bool {
+        self.homing.is_homed
+    }
+    fn home(&mut self, timeout: u32, current: f32) {
+        self.homing.state = MotorState::Start;
+        self.homing.homing_ms = now();
+        self.homing.timeout = timeout;
+        self.homing.current = current;
     }
 
-    pub async fn execute(&mut self) {
+    async fn disable(&mut self) -> Result<(), Self::Error> {
+        self.disable_motor().await
+    }
+
+    async fn enable(&mut self) -> Result<(), Self::Error> {
+        self.enable_motor().await
+    }
+
+    fn get_torque_fdb(&self) -> f32 {
+        self.log_parameters.torque_fdb * self.direction as f32
+    }
+
+    fn get_position(&self) -> f32 {
+        self.log_parameters.pos
+    }
+
+    async fn execute(&mut self) {
         let _ = self.request_status_report().await;
 
         // homing process:
@@ -680,7 +442,7 @@ where
                     .set_current_limit(self.default_params.current_limit)
                     .await;
                 let _ = self.set_speed_limit(self.default_params.speed_limit).await;
-                self.homing.homing = 0;
+                self.homing.homing_ms = 0;
                 self.homing.state = MotorState::Idle;
                 self.homing.is_homed = self.homing.home_found;
                 info!("Ending homing sequence");
@@ -694,6 +456,414 @@ where
             self.homing.is_homed = false;
             self.can_send_error = 0;
         }
+    }
+}
+
+impl<C, A> CyberGear<C, A>
+where
+    C: Can + 'static,
+    A: CanFrameAdapter<C::Frame>,
+    <C as Can>::Error: Debug,
+{
+    pub fn new(
+        can_id: u8,
+        can_dev: &'static Mutex<CriticalSectionRawMutex, Option<C>>,
+        adapter: A,
+    ) -> Self {
+        Self {
+            motor_id: can_id,
+            adapter,
+            host_id: 0x7D,
+            direction: 1,
+            can: can_dev,
+            current_mode: Default::default(),
+            logging_active: false,
+            default_params: Parameters::default(),
+            target_position: 0.0,
+            last_response: 0,
+            last_cmd_sent: 0,
+            last_status_frame_rec: 0,
+            fault_time: 0,
+            enabled: false,
+            last_status_frame_req: 0,
+            uuid: 0,
+            status: cyber_gear_motor_status_t::default(),
+            can_send_error: 0,
+            current_params: Parameters::default(),
+            homing: Homing {
+                current: 0.6,
+                ..Default::default()
+            },
+            log_parameters: LogParameters {
+                freq: 50,
+                ..Default::default()
+            },
+        }
+    }
+
+    pub(crate) fn init_frame(
+        &self,
+        frame: *mut cyber_gear_can_t,
+        can_type: cyber_gear_can_communication_type_t,
+    ) {
+        unsafe {
+            cyber_gear_can_init(frame);
+            cyber_gear_set_can_id_host_can_id(frame, self.host_id as i32);
+            cyber_gear_set_can_id_target_can_id(frame, self.motor_id as i32);
+            cyber_gear_set_can_id_communication_type(frame, can_type);
+        }
+    }
+
+    async fn set_mode(&mut self, mode: MotorMode) -> Result<(), GearError<C>> {
+        let mut frame = cyber_gear_can_t::new();
+        self.init_frame(
+            &mut frame as *mut cyber_gear_can_t,
+            cyber_gear_can_communication_type_t_COMMUNICATION_WRITE_SINGLE_PARAM,
+        );
+
+        unsafe {
+            cyber_gear_build_parameter_write_frame_with_int_value(
+                &mut frame as *mut cyber_gear_can_t,
+                cyber_gear_read_write_parameter_index_t_PARAMETER_RUN_MODE,
+                mode as i32,
+            );
+        }
+        self.send_frame(frame, false).await?;
+        self.current_mode = mode;
+        info!("Changed mode to: {:?}", mode);
+        Ok(())
+    }
+
+    async fn enable_motor(&mut self) -> Result<(), GearError<C>> {
+        let mut frame = cyber_gear_can_t::new();
+        self.init_frame(
+            &mut frame as *mut cyber_gear_can_t,
+            cyber_gear_can_communication_type_t_COMMUNICATION_ENABLE_DEVICE,
+        );
+        self.send_frame(frame, false).await?;
+        self.enabled = true;
+
+        if !self.start_logging().await {
+            error!("Failed to start logging");
+            return Err(GearError::StartLoggingError);
+        }
+
+        Ok(())
+    }
+
+    #[allow(unused)]
+    async fn check_enabled(&mut self) -> Result<(), GearError<C>> {
+        let mut frame = cyber_gear_can_t::new();
+        self.init_frame(
+            &mut frame as *mut cyber_gear_can_t,
+            cyber_gear_can_communication_type_t_COMMUNICATION_READ_SINGLE_PARAM,
+        );
+        frame.can_data.value = cyber_gear_config_index_t_CONFIG_R_TORQUE_FDB as u64;
+        self.send_frame(frame, false).await?;
+        self.enabled = true;
+        Ok(())
+    }
+
+    async fn clear_fault(&mut self) -> Result<(), GearError<C>> {
+        let mut frame = cyber_gear_can_t::new();
+        self.init_frame(
+            &mut frame as *mut cyber_gear_can_t,
+            cyber_gear_can_communication_type_t_COMMUNICATION_DISABLE_DEVICE,
+        );
+        unsafe {
+            frame.can_data.bytes[0] = 0x1;
+        }
+        self.send_frame(frame, false).await?;
+        if self.enabled {
+            self.enable_motor().await?;
+        }
+        info!("Fault cleared");
+        Ok(())
+    }
+
+    async fn request_status_report(&mut self) -> bool {
+        if now() - self.last_status_frame_req < 100 {
+            return false;
+        }
+
+        let mut frame = cyber_gear_can_t::new();
+
+        if self.enabled {
+            self.init_frame(
+                &mut frame as *mut cyber_gear_can_t,
+                cyber_gear_can_communication_type_t_COMMUNICATION_ENABLE_DEVICE,
+            );
+        } else {
+            self.init_frame(
+                &mut frame as *mut cyber_gear_can_t,
+                cyber_gear_can_communication_type_t_COMMUNICATION_DISABLE_DEVICE,
+            );
+        }
+
+        if self.send_frame(frame, false).await.is_ok() {
+            self.last_status_frame_req = now();
+            return true;
+        }
+        false
+    }
+
+    async fn disable_motor(&mut self) -> Result<(), GearError<C>> {
+        let mut frame = cyber_gear_can_t::new();
+        self.init_frame(
+            &mut frame as *mut cyber_gear_can_t,
+            cyber_gear_can_communication_type_t_COMMUNICATION_DISABLE_DEVICE,
+        );
+        self.send_frame(frame, false).await?;
+        self.enabled = false;
+        self.stop_logging().await;
+        Ok(())
+    }
+
+    async fn set_speed_limit(&mut self, limit: f32) -> Result<(), GearError<C>> {
+        let mut frame = cyber_gear_can_t::new();
+        self.init_frame(
+            &mut frame as *mut cyber_gear_can_t,
+            cyber_gear_can_communication_type_t_COMMUNICATION_WRITE_SINGLE_PARAM,
+        );
+        unsafe {
+            cyber_gear_build_parameter_write_frame_with_float_value(
+                &mut frame as *mut cyber_gear_can_t,
+                cyber_gear_read_write_parameter_index_t_PARAMETER_LIMIT_SPD,
+                limit,
+            );
+        }
+        self.current_params.speed_limit = limit;
+        self.send_frame(frame, false).await
+    }
+
+    async fn set_torque_limit(&mut self, limit: f32) -> Result<(), GearError<C>> {
+        let mut frame = cyber_gear_can_t::new();
+        self.init_frame(
+            &mut frame as *mut cyber_gear_can_t,
+            cyber_gear_can_communication_type_t_COMMUNICATION_WRITE_SINGLE_PARAM,
+        );
+        unsafe {
+            cyber_gear_build_parameter_write_frame_with_float_value(
+                &mut frame as *mut cyber_gear_can_t,
+                cyber_gear_read_write_parameter_index_t_PARAMETER_LIMIT_TORQUE,
+                limit,
+            );
+        }
+        self.current_params.torque_limit = limit;
+        self.send_frame(frame, false).await
+    }
+
+    async fn set_ki(&mut self, ki: f32) -> Result<(), GearError<C>> {
+        let mut frame = cyber_gear_can_t::new();
+        self.init_frame(
+            &mut frame as *mut cyber_gear_can_t,
+            cyber_gear_can_communication_type_t_COMMUNICATION_WRITE_SINGLE_PARAM,
+        );
+
+        unsafe {
+            cyber_gear_build_parameter_write_frame_with_float_value(
+                &mut frame as *mut cyber_gear_can_t,
+                cyber_gear_read_write_parameter_index_t_PARAMETER_CUR_KI,
+                ki,
+            );
+        }
+
+        self.current_params.ki = ki;
+        self.send_frame(frame, false).await
+    }
+
+    async fn set_kp(&mut self, kp: f32) -> Result<(), GearError<C>> {
+        let mut frame = cyber_gear_can_t::new();
+        self.init_frame(
+            &mut frame as *mut cyber_gear_can_t,
+            cyber_gear_can_communication_type_t_COMMUNICATION_WRITE_SINGLE_PARAM,
+        );
+
+        unsafe {
+            cyber_gear_build_parameter_write_frame_with_float_value(
+                &mut frame as *mut cyber_gear_can_t,
+                cyber_gear_read_write_parameter_index_t_PARAMETER_CUR_KP,
+                kp,
+            );
+        }
+
+        self.current_params.kp = kp;
+        self.send_frame(frame, false).await
+    }
+
+    // No kd value for cyber gear?
+    fn set_kd(&mut self, kd: f32) -> Result<(), GearError<C>> {
+        //  let mut frame = cyber_gear_can_t::new();
+        //  self.init_frame(
+        //      &mut frame as *mut cyber_gear_can_t,
+        //      cyber_gear_can_communication_type_t_COMMUNICATION_WRITE_SINGLE_PARAM,
+        //  );
+        //  unsafe {
+        //      cyber_gear_build_parameter_write_frame_with_float_value(
+        //          &mut frame as *mut cyber_gear_can_t,
+        //          cyber_gear_read_write_parameter_index_t_PARAMETER_CUR_KD,
+        //          kd,
+        //      );
+        //  }
+        //  self.send_frame(frame,false)?;
+        self.current_params.kd = kd;
+        Ok(())
+    }
+
+    async fn set_filter_gain(&mut self, gain: f32) -> Result<(), GearError<C>> {
+        let mut frame = cyber_gear_can_t::new();
+        self.init_frame(
+            &mut frame as *mut cyber_gear_can_t,
+            cyber_gear_can_communication_type_t_COMMUNICATION_WRITE_SINGLE_PARAM,
+        );
+
+        unsafe {
+            cyber_gear_build_parameter_write_frame_with_float_value(
+                &mut frame as *mut cyber_gear_can_t,
+                cyber_gear_read_write_parameter_index_t_PARAMETER_CUR_FILT_GAIN,
+                gain,
+            );
+        }
+
+        self.current_params.filter_gain = gain;
+        self.send_frame(frame, false).await
+    }
+
+    async fn run_speed(&mut self, speed: f32) -> Result<(), GearError<C>> {
+        if self.current_mode != MotorMode::Speed {
+            self.set_mode(MotorMode::Speed).await?;
+        }
+        let mut frame = cyber_gear_can_t::new();
+        self.init_frame(
+            &mut frame as *mut cyber_gear_can_t,
+            cyber_gear_can_communication_type_t_COMMUNICATION_MOTION_CONTROL_COMMAND,
+        );
+        unsafe {
+            cyber_gear_build_parameter_write_frame_with_float_value(
+                &mut frame as *mut cyber_gear_can_t,
+                cyber_gear_read_write_parameter_index_t_PARAMETER_SPD_REF,
+                speed * self.direction as f32,
+            );
+        }
+        self.send_frame(frame, false).await
+    }
+
+    #[allow(unused)]
+    async fn run_current(&mut self, current: f32) -> Result<(), GearError<C>> {
+        if self.current_mode != MotorMode::Current {
+            self.set_mode(MotorMode::Current).await?;
+        }
+
+        let mut frame = cyber_gear_can_t::new();
+        self.init_frame(
+            &mut frame as *mut cyber_gear_can_t,
+            cyber_gear_can_communication_type_t_COMMUNICATION_MOTION_CONTROL_COMMAND,
+        );
+
+        unsafe {
+            cyber_gear_build_parameter_write_frame_with_float_value(
+                &mut frame as *mut cyber_gear_can_t,
+                cyber_gear_read_write_parameter_index_t_PARAMETER_IQ_REF,
+                current * self.direction as f32,
+            );
+        }
+
+        self.send_frame(frame, false).await
+    }
+
+    async fn run_position(&mut self, position: f32) -> Result<(), GearError<C>> {
+        if self.current_mode != MotorMode::Position {
+            self.set_mode(MotorMode::Position).await?;
+        }
+
+        let mut frame = cyber_gear_can_t::new();
+
+        self.init_frame(
+            &mut frame as *mut cyber_gear_can_t,
+            cyber_gear_can_communication_type_t_COMMUNICATION_MOTION_CONTROL_COMMAND,
+        );
+
+        unsafe {
+            cyber_gear_build_parameter_write_frame_with_float_value(
+                &mut frame as *mut cyber_gear_can_t,
+                cyber_gear_read_write_parameter_index_t_PARAMETER_LOC_REF,
+                position * self.direction as f32,
+            );
+        }
+
+        self.send_frame(frame, false).await
+    }
+
+    #[allow(clippy::wrong_self_convention)]
+    async fn is_ready(&mut self) -> bool {
+        if now() - self.last_status_frame_rec < 5000 || now() - self.log_parameters.last_rcv < 100 {
+            if self.status_error() {
+                if self.fault_time == 0 {
+                    self.fault_time = now();
+                }
+
+                info!(
+                    "Motor Error:\r\nOC:{}\r\nUV:{}\r\nOT:{}\r\nCAL:{}\r\nHALL:{}\r\nMAG:{}",
+                    self.status.has_over_current,
+                    self.status.has_undervoltage,
+                    self.status.has_over_temperature,
+                    self.status.has_calibration_error,
+                    self.status.has_hall_encode_error,
+                    self.status.has_magnetic_encoding_error,
+                );
+
+                delay_ms(5).await;
+
+                if let Err(_e) = self.clear_fault().await {
+                    error!("CyberGear clear_fault error");
+                }
+
+                return false;
+            }
+
+            if self.fault_time != 0 {
+                self.fault_time = 0;
+            }
+
+            return true;
+        }
+
+        self.request_status_report().await
+    }
+
+    #[allow(unused)]
+    pub(crate) async fn run_op(
+        &mut self,
+        speed: f32,
+        position: f32,
+        torque: f32,
+        kd: f32,
+        kp: f32,
+    ) -> Result<(), GearError<C>> {
+        let mut frame = cyber_gear_can_t::new();
+
+        self.init_frame(
+            &mut frame as *mut cyber_gear_can_t,
+            cyber_gear_can_communication_type_t_COMMUNICATION_MOTION_CONTROL_COMMAND,
+        );
+
+        let control_params = cyber_gear_motion_control_t {
+            motor_can_id: self.motor_id,
+            target_speed: speed,
+            target_location: position * self.direction as f32,
+            kd,
+            kp,
+            torque,
+        };
+
+        unsafe {
+            cyber_gear_build_motion_control_frame(
+                &mut frame as *mut cyber_gear_can_t,
+                control_params,
+            );
+        }
+
+        self.send_frame(frame, false).await
     }
 
     pub async fn set_parameters(
@@ -743,7 +913,7 @@ where
         self.send_frame(frame, false).await
     }
 
-    pub async fn restore_config(&mut self) -> Result<(), GearError<C>> {
+    async fn restore_config(&mut self) -> Result<(), GearError<C>> {
         self.set_current_limit(self.current_params.current_limit)
             .await?;
         self.set_speed_limit(self.current_params.speed_limit)
@@ -763,12 +933,12 @@ where
         delay_ms(5).await;
 
         if self.enabled {
-            self.enable().await?;
+            self.enable_motor().await?;
         }
         Ok(())
     }
 
-    pub async fn process_inframe(&mut self, frame: &C::Frame) -> bool {
+    async fn process_frame(&mut self, frame: &C::Frame) -> bool {
         let frame_cyber = self.adapter.from_frame(&frame);
         let mut cybergear_frame = cyber_gear_can_t::from(frame_cyber);
         let id_bytes = unsafe { cybergear_frame.can_id.bytes };
@@ -879,14 +1049,7 @@ where
         true
     }
 
-    pub fn home(&mut self, timeout: u32, current: f32) {
-        self.homing.state = MotorState::Start;
-        self.homing.homing = now();
-        self.homing.timeout = timeout;
-        self.homing.current = current;
-    }
-
-    pub async fn start_logging(&mut self) -> bool {
+    async fn start_logging(&mut self) -> bool {
         info!("Starting logging");
         let mut frame1 = cyber_gear_can_t::new();
 
@@ -978,7 +1141,7 @@ where
         false
     }
 
-    pub async fn stop_logging(&mut self) -> bool {
+    async fn stop_logging(&mut self) -> bool {
         info!("Stopping logging");
         let mut cyber_gear_frame = cyber_gear_can_t::new();
         self.init_frame(
@@ -1002,7 +1165,7 @@ where
         false
     }
 
-    pub fn set_logging_pid(&self, frame: &mut cyber_gear_can_t, pid: u16, pos: usize) {
+    fn set_logging_pid(&self, frame: &mut cyber_gear_can_t, pid: u16, pos: usize) {
         let [lo, hi] = pid.to_le_bytes();
         unsafe {
             frame.can_data.bytes[pos * 2 + 1] = hi;
@@ -1139,33 +1302,7 @@ impl Default for Parameters {
     }
 }
 
-#[repr(C)]
-#[allow(dead_code)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum MotorCommand {
-    MotorStop = 0,
-    EnableMotor,
-
-    FetchStatus,
-    SetZeroPos,
-
-    SetModeCurrent,
-    SetModeSpeed,
-    SetModePosition,
-    SetModeOperation,
-
-    SetCurrentLimit,
-    SetSpeedLimit,
-    SetTorqueLimit,
-    SetKi,
-    SetKp,
-    SetFilterGain,
-
-    SetTargetPosition,
-    SetTargetSpeed,
-    SetTargetCurrent,
-}
-
+/// Cybergear operating modes
 #[repr(C)]
 #[allow(dead_code)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default, Format)]
