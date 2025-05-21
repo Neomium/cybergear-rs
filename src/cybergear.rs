@@ -179,6 +179,9 @@ pub trait ServoMotor {
 
     /// Returns true if motor is enabled
     fn is_enabled(&self) -> bool;
+
+    /// Returns instant in ms of last command sent
+    fn last_cmd_sent(&self) -> u32;
 }
 
 /// Xiaomi Cybergear servo motor
@@ -470,6 +473,10 @@ where
 
     fn is_enabled(&self) -> bool {
         self.enabled
+    }
+
+    fn last_cmd_sent(&self) -> u32 {
+        self.last_cmd_sent
     }
 }
 
