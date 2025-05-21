@@ -153,6 +153,9 @@ pub trait ServoMotor {
     /// Set target position for motor
     fn set_target_position(&mut self, position: f32);
 
+    /// Get target position for motor
+    fn get_target_position(&self) -> f32;
+
     /// Returns true if motor is homed
     fn is_homed(&self) -> bool;
 
@@ -347,6 +350,10 @@ where
 
     fn set_target_position(&mut self, position: f32) {
         self.target_position = position;
+    }
+
+    fn get_target_position(&self) -> f32 {
+        self.target_position
     }
 
     fn is_homed(&self) -> bool {
