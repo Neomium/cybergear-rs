@@ -118,7 +118,7 @@ where
 }
 
 pub trait ServoMotor {
-    type Error;
+    type Error: Format;
     type Frame: Frame;
     async fn init(&mut self) -> Result<(), Self::Error>;
 
