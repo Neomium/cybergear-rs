@@ -176,6 +176,9 @@ pub trait ServoMotor {
 
     /// Returns instant of last homing command, if > 0 homing is in progress
     fn homing_instant(&self) -> u32;
+
+    /// Returns true if motor is enabled
+    fn is_enabled(&self) -> bool;
 }
 
 /// Xiaomi Cybergear servo motor
@@ -463,6 +466,10 @@ where
 
     fn homing_instant(&self) -> u32 {
         self.homing.homing_ms
+    }
+
+    fn is_enabled(&self) -> bool {
+        self.enabled
     }
 }
 
